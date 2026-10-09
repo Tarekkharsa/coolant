@@ -1,0 +1,20 @@
+[package]
+name = "coolant-cli"
+description = "Find out why your machine runs hot when AI coding agents run in parallel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "coolant"
+path = "src/main.rs"
+
+[dependencies]
+coolant-platform.workspace = true
+coolant-core.workspace = true
+coolant-bench.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+ctrlc.workspace = true
