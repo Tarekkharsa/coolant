@@ -81,7 +81,7 @@ pub fn findings(run: &Run) -> Vec<Finding> {
         push(
             sev(rate, 50.0),
             format!("{rate:.0} processes launched per second"),
-            "Every launch costs fork/exec, dyld and code-signing checks on macOS. Short-lived git/rg/node processes add up.",
+            "Every launch costs fork/exec and dynamic linking, plus code-signing checks on macOS. Short-lived git/rg/node processes add up.",
             "",
         );
     }

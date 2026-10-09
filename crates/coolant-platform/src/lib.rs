@@ -18,7 +18,7 @@ pub fn current() -> Box<dyn Backend> {
     #[cfg(target_os = "macos")]
     return Box::new(darwin::Darwin::new());
     #[cfg(target_os = "linux")]
-    return Box::new(linux::Linux);
+    return Box::new(linux::Linux::new());
     #[cfg(target_os = "windows")]
     return Box::new(windows::Windows);
 }

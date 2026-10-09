@@ -12,6 +12,9 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+#[cfg(unix)]
+mod workspace;
+
 #[derive(Parser)]
 #[command(name = "coolant", version, about = "Why is my machine hot while agents run?")]
 struct Cli {
@@ -54,6 +57,67 @@ enum Cmd {
         #[arg(short, long, default_value = "runs")]
         out: PathBuf,
     },
+    /// Check this machine for setups that make agents run hot
+    #[cfg(unix)]
+    Doctor {
+        /// Seconds to watch running processes
+        #[arg(short, long, default_value_t = 3)]
+        sample: u64,
+        /// Print checks as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Keep folders out of Spotlight and Time Machine (moves them into a
+    /// .noindex folder and leaves a symlink)
+    #[cfg(unix)]
+    Tune {
+        paths: Vec<PathBuf>,
+        /// Show what would happen without changing anything
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+        /// Tune even if a process is using the folder
+        #[arg(long)]
+        force: bool,
+        /// Move the folders back
+        #[arg(long)]
+        undo: bool,
+    },
+    /// Clone the main checkout's build artifacts into a worktree
+    #[cfg(unix)]
+    Prewarm {
+        /// Worktree to prewarm (default: current directory)
+        worktree: Option<PathBuf>,
+        /// Checkout to clone from (default: the repository's main checkout)
+        #[arg(long)]
+        from: Option<PathBuf>,
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+        /// Install a git hook in this repository that prewarms every new worktree
+        #[arg(long, value_name = "REPO")]
+        install_hook: Option<PathBuf>,
+    },
+    /// Delete build artifacts from idle or merged worktrees
+    #[cfg(unix)]
+    Sweep {
+        /// Worktrees idle this many days are swept
+        #[arg(long, default_value_t = 7.0)]
+        days: f64,
+        /// Also remove merged worktrees that have no local changes
+        #[arg(long)]
+        remove_merged: bool,
+        /// Actually delete (default is a dry run)
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Protect paths from tune, sweep and process actions
+    #[cfg(unix)]
+    Protect {
+        /// Paths to add (none: list protected paths)
+        paths: Vec<PathBuf>,
+        /// Remove these paths from the list instead
+        #[arg(long)]
+        remove: bool,
+    },
     /// Print temperature, power and fan readings
     Sensors {
         #[arg(short = 'n', long, default_value_t = 5)]
@@ -73,6 +137,18 @@ fn main() -> Result<()> {
         #[cfg(unix)]
         Cmd::Bench { preset, scenarios, agents, out } => bench(&preset, scenarios, agents, &out),
         Cmd::Sensors { count } => sensors(count),
+        #[cfg(unix)]
+        Cmd::Doctor { sample, json } => workspace::doctor(sample, json),
+        #[cfg(unix)]
+        Cmd::Tune { paths, dry_run, force, undo } => workspace::tune(paths, dry_run, force, undo),
+        #[cfg(unix)]
+        Cmd::Prewarm { worktree, from, dry_run, install_hook } => {
+            workspace::prewarm(worktree, from, dry_run, install_hook)
+        }
+        #[cfg(unix)]
+        Cmd::Sweep { days, remove_merged, yes } => workspace::sweep(days, remove_merged, yes),
+        #[cfg(unix)]
+        Cmd::Protect { paths, remove } => workspace::protect(paths, remove),
     }
 }
 

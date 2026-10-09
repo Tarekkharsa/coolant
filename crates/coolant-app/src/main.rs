@@ -5,6 +5,7 @@
 //! only redraws on `notify`, so the dashboard costs almost nothing between
 //! ticks, which matters for a tool whose job is to find heat.
 
+mod stacks;
 mod theme;
 mod widgets;
 
@@ -15,6 +16,7 @@ use gpui::{
     App, Application, Bounds, Context, FontWeight, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions,
     div, prelude::*, px, size,
 };
+use stacks::Stack;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use theme::*;
@@ -24,10 +26,22 @@ use widgets::*;
 const HISTORY: usize = 120;
 /// Samples averaged for the live category bars.
 const NOW_WINDOW: usize = 5;
+/// Seconds between refreshes of the leftover-process groups (runs lsof).
+const STACKS_EVERY: u64 = 5;
+
+/// What the sampler thread hands to the UI.
+struct Update {
+    run: Run,
+    stacks: Option<Vec<Stack>>,
+}
 
 struct Dashboard {
-    shared: Arc<Mutex<Option<Run>>>,
+    shared: Arc<Mutex<Option<Update>>>,
     run: Option<Run>,
+    stacks: Vec<Stack>,
+    /// Stack whose Stop button was clicked once and awaits confirmation.
+    confirm: Option<String>,
+    status: Option<SharedString>,
     error: Option<String>,
 }
 
@@ -39,8 +53,12 @@ impl Dashboard {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let alive = this.update(cx, |d, cx| {
-                    if let Some(run) = d.shared.lock().unwrap().take() {
-                        d.run = Some(run);
+                    let update = d.shared.lock().unwrap().take();
+                    if let Some(u) = update {
+                        d.run = Some(u.run);
+                        if let Some(s) = u.stacks {
+                            d.stacks = s;
+                        }
                         cx.notify();
                     }
                 });
@@ -50,23 +68,111 @@ impl Dashboard {
             }
         })
         .detach();
-        Dashboard { shared, run: None, error }
+        Dashboard { shared, run: None, stacks: Vec::new(), confirm: None, status: None, error }
+    }
+}
+
+impl Dashboard {
+    /// Leftover dev processes, grouped by project, each with a two-step Stop.
+    fn leftovers(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let run = self.run.as_ref().unwrap();
+        let mut body = div().flex().flex_col().gap_3();
+        if self.stacks.is_empty() {
+            body = body.child(
+                div().text_sm().text_color(MUTED).child("None: every dev process still has its parent session."),
+            );
+        }
+        for (i, st) in self.stacks.iter().enumerate() {
+            let names: Vec<String> = st.procs.iter().take(4).map(|p| format!("{} ({})", p.name, p.pid)).collect();
+            let more = st.procs.len().saturating_sub(4);
+            let action = match st.locked {
+                Some(why) => div().text_xs().text_color(MUTED).child(format!("locked: {why}")).into_any_element(),
+                None => {
+                    let confirming = self.confirm.as_deref() == Some(st.key.as_str());
+                    let key = st.key.clone();
+                    let label = if confirming { "Confirm stop" } else { "Stop" };
+                    div()
+                        .id(("stop", i))
+                        .px_3()
+                        .py_1()
+                        .rounded_md()
+                        .text_sm()
+                        .cursor_pointer()
+                        .bg(if confirming { BAD } else { TRACK })
+                        .hover(|s| s.bg(BORDER))
+                        .child(label)
+                        .on_click(cx.listener(move |this, _ev, _window, cx| {
+                            if this.confirm.as_deref() == Some(key.as_str()) {
+                                this.confirm = None;
+                                if let Some(st) = this.stacks.iter().find(|s| s.key == key).cloned() {
+                                    this.status = Some(match stacks::stop(&st) {
+                                        Ok(n) => format!("Sent SIGTERM to {n} process(es) in {}", st.key).into(),
+                                        Err(e) => e.into(),
+                                    });
+                                    this.stacks.retain(|s| s.key != key);
+                                }
+                            } else {
+                                this.confirm = Some(key.clone());
+                            }
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                }
+            };
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(st.key.clone()))
+                            .child(div().text_xs().text_color(MUTED).child(format!(
+                                "{} process(es) · {:.2} cores · {} · {}{}",
+                                st.procs.len(),
+                                run.cores(st.cpu_s),
+                                report::bytes(st.rss_bytes),
+                                names.join(", "),
+                                if more > 0 { format!(" +{more}") } else { String::new() }
+                            ))),
+                    )
+                    .child(action),
+            );
+        }
+        if let Some(s) = &self.status {
+            body = body.child(div().text_xs().text_color(GOOD).child(s.clone()));
+        }
+        card("Leftover dev processes", Some("outlived the agent or terminal that started them"), body)
     }
 }
 
 /// Samples on a dedicated thread so a slow `ps` never stalls the UI.
-fn start_sampler(shared: Arc<Mutex<Option<Run>>>) -> Result<(), String> {
+fn start_sampler(shared: Arc<Mutex<Option<Update>>>) -> Result<(), String> {
     let backend = Arc::from(coolant_platform::current());
     let opts = Options { interval: Duration::from_secs(1), max_samples: Some(HISTORY), on_sample: None };
     let mut session = Session::new(backend, opts).map_err(|e| e.to_string())?;
     std::thread::Builder::new()
         .name("coolant-sampler".into())
         .spawn(move || {
+            let mut tick = 0u64;
             loop {
                 std::thread::sleep(Duration::from_secs(1));
-                if session.sample() {
-                    *shared.lock().unwrap() = Some(session.snapshot());
+                tick += 1;
+                if !session.sample() {
+                    continue;
                 }
+                let run = session.snapshot();
+                let mut stacks = (tick % STACKS_EVERY == 1).then(|| stacks::stacks(&run));
+                let mut pending = shared.lock().unwrap();
+                // Don't drop groups the UI hasn't picked up yet.
+                if stacks.is_none() {
+                    stacks = pending.take().and_then(|u| u.stacks);
+                }
+                *pending = Some(Update { run, stacks });
             }
         })
         .map_err(|e| e.to_string())?;
@@ -74,7 +180,9 @@ fn start_sampler(shared: Arc<Mutex<Option<Run>>>) -> Result<(), String> {
 }
 
 impl Render for Dashboard {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let ready = self.error.is_none() && self.run.as_ref().is_some_and(|r| r.samples.len() >= 2);
+        let leftovers = ready.then(|| self.leftovers(cx));
         let body = match (&self.run, &self.error) {
             (_, Some(err)) => placeholder(format!("Can't read this machine: {err}")),
             (None, _) => placeholder("Taking the first samples…".to_string()),
@@ -94,6 +202,7 @@ impl Render for Dashboard {
             .gap_4()
             .child(header(self.run.as_ref()))
             .child(body)
+            .children(leftovers)
     }
 }
 

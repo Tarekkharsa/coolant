@@ -12,6 +12,7 @@ repository = "https://github.com/Tarekkharsa/coolant"
 coolant-platform = { path = "crates/coolant-platform" }
 coolant-core = { path = "crates/coolant-core" }
 coolant-bench = { path = "crates/coolant-bench" }
+coolant-workspace = { path = "crates/coolant-workspace" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 libc = "0.2"
