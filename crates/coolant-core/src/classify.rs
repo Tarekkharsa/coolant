@@ -37,13 +37,15 @@ pub enum Category {
     BackupSync,
     ContainerVm,
     Browser,
+    /// The desktop itself: window server, Dock, Finder, wallpaper.
+    Desktop,
     Kernel,
     Other,
 }
 
 impl Category {
     /// Every category in display order.
-    pub const ALL: [Category; 16] = [
+    pub const ALL: [Category; 17] = [
         Self::Agent,
         Self::AgentHost,
         Self::LanguageServer,
@@ -58,6 +60,7 @@ impl Category {
         Self::BackupSync,
         Self::ContainerVm,
         Self::Browser,
+        Self::Desktop,
         Self::Kernel,
         Self::Other,
     ];
@@ -84,6 +87,7 @@ impl Category {
             Self::BackupSync => "backup-sync",
             Self::ContainerVm => "container-vm",
             Self::Browser => "browser",
+            Self::Desktop => "desktop",
             Self::Kernel => "kernel",
             Self::Other => "other",
         }
@@ -346,6 +350,34 @@ const NAME_RULES: &[(Category, &[&str])] = &[
             "Brave Browser",
             "chrome-headless-shell",
             "Chromium",
+        ],
+    ),
+    (
+        Desktop,
+        &[
+            "WindowServer",
+            "Dock",
+            "Finder",
+            "SystemUIServer",
+            "ControlCenter",
+            "NotificationCenter",
+            "loginwindow",
+            "WallpaperAerialsExtension",
+            "WallpaperAgent",
+            "WallpaperImageExtension",
+            "contextstored",
+            "corebrightnessd",
+            "universalaccessd",
+            "TextInputMenuAgent",
+            "Spotlight Helper",
+            "dwm.exe",
+            "explorer.exe",
+            "gnome-shell",
+            "kwin_wayland",
+            "kwin_x11",
+            "Xorg",
+            "Xwayland",
+            "plasmashell",
         ],
     ),
     (Kernel, &["kernel_task", "System", "launchd"]),

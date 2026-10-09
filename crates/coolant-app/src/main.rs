@@ -276,12 +276,12 @@ fn content(run: &Run) -> gpui::AnyElement {
             div()
                 .flex()
                 .gap_4()
-                .child(div().flex_1().child(card(
+                .child(div().flex_1().min_w_0().child(card(
                     "Where the CPU is going now",
                     Some("average of the last 5 s"),
                     categories_now(run),
                 )))
-                .child(div().flex_1().child(card("Findings", Some("since launch"), findings(run)))),
+                .child(div().flex_1().min_w_0().child(card("Findings", Some("since launch"), findings(run)))),
         )
         .child(card("Agent sessions", Some("agent + everything it launched, since launch"), sessions(run)))
         .child(card("Top processes", Some("since launch"), processes(run)))
@@ -326,6 +326,8 @@ fn findings(run: &Run) -> impl IntoElement {
         };
         div().flex().gap_2().child(div().mt_1p5().size_2().rounded_full().bg(color).flex_none()).child(
             div()
+                .flex_1()
+                .min_w_0()
                 .flex()
                 .flex_col()
                 .gap_0p5()
@@ -390,8 +392,20 @@ fn placeholder(msg: String) -> gpui::AnyElement {
 }
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1120.), px(860.)), cx);
+    // COOLANT_SCREENSHOT_SECS=N: a taller window at the screen's right edge
+    // that quits after N seconds. Used with scripts/screenshot.sh, which
+    // builds against a GPUI patched to save its frames.
+    let screenshot_secs: Option<u64> = std::env::var("COOLANT_SCREENSHOT_SECS").ok().and_then(|s| s.parse().ok());
+    Application::new().run(move |cx: &mut App| {
+        let mut bounds = Bounds::centered(None, size(px(1120.), px(860.)), cx);
+        if screenshot_secs.is_some()
+            && let Some(display) = cx.primary_display()
+        {
+            let screen = display.bounds();
+            bounds.size.height = px(1300.).min(screen.size.height - px(60.));
+            bounds.origin =
+                gpui::point(screen.origin.x + screen.size.width - bounds.size.width, screen.origin.y + px(40.));
+        }
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions { title: Some("coolant".into()), ..Default::default() }),
@@ -400,5 +414,13 @@ fn main() {
         cx.open_window(options, |_, cx| cx.new(Dashboard::new)).expect("failed to open window");
         cx.on_window_closed(|cx| cx.quit()).detach();
         cx.activate(true);
+
+        if let Some(secs) = screenshot_secs {
+            cx.spawn(async move |cx| {
+                cx.background_executor().timer(Duration::from_secs(secs)).await;
+                let _ = cx.update(|cx| cx.quit());
+            })
+            .detach();
+        }
     });
 }

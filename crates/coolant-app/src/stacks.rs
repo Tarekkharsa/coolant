@@ -41,7 +41,9 @@ pub fn stacks(run: &Run) -> Vec<Stack> {
     let mut groups: BTreeMap<String, Stack> = BTreeMap::new();
     for o in &run.orphans {
         let cwd = inuse.cwd(o.pid).map(Path::to_path_buf);
-        let root = cwd.as_deref().map(project_root);
+        // Group by protected path first (it may not be a git project), then
+        // by the git project the process runs in.
+        let root = cwd.as_deref().map(|c| cfg.protected_root(c).unwrap_or_else(|| project_root(c)));
         let key = root.as_deref().map(tilde).unwrap_or_else(|| o.name.clone());
         let s = groups.entry(key.clone()).or_insert_with(|| Stack {
             key,

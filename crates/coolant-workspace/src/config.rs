@@ -74,6 +74,12 @@ impl Config {
         roots
     }
 
+    /// The protected path containing `p`, if any.
+    pub fn protected_root(&self, p: &Path) -> Option<PathBuf> {
+        let p = canonical(p);
+        self.protect.iter().map(|q| canonical(&expand(q))).find(|q| p.starts_with(q))
+    }
+
     /// Whether `p` is inside (or is) a protected path.
     pub fn is_protected(&self, p: &Path) -> bool {
         let p = canonical(p);

@@ -55,8 +55,10 @@ pub fn sparkline(values: &[f64], color: Rgba) -> Div {
     let tail = &values[values.len().saturating_sub(POINTS)..];
     let (lo, hi) = tail.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
     let span = (hi - lo).max(1e-9);
+    // Changes under 2% of the value are sensor noise (a fan at 999–1001 rpm).
+    let flat = hi - lo < 0.02 * hi.abs().max(1e-9);
     let bars = tail.iter().map(move |&v| {
-        let h = if hi - lo < 1e-6 { 0.5 } else { 0.08 + 0.92 * (v - lo) / span };
+        let h = if flat { 0.5 } else { 0.08 + 0.92 * (v - lo) / span };
         div().flex_1().h(relative(h as f32)).bg(color).rounded_sm()
     });
     div().mt_2().h(px(36.)).flex().items_end().gap(px(1.5)).children(bars)

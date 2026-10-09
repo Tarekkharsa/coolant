@@ -5,13 +5,15 @@ coolant is a Cargo workspace. Everything OS-specific lives behind one trait.
 ```
 crates/
   coolant-platform/   Backend trait + shared types (Process, Sensors, Spawn, …)
-    src/darwin/       macOS: ps + libproc, IOHID/SMC/IOReport sensors, PID-gap spawn counter
-    src/linux.rs      stub (planned: /proc, hwmon, RAPL, fanotify)
+    src/darwin/       macOS: ps + libproc, IOHID/SMC/IOReport/coalition sensors, PID-gap spawn counter
+    src/linux/        Linux: /proc, hwmon/thermal/RAPL sensors, /proc/loadavg PID-cursor spawn counter
     src/windows.rs    stub (planned: ETW, WMI thermal zones, Defender counters)
   coolant-core/       classify (process → category + agent session),
-                      profile (sampling engine and attribution), report (text + findings)
+                      profile (Session/Recorder: sampling and attribution), report (text + findings)
   coolant-bench/      reproducible agent-like workloads run under the profiler
+  coolant-workspace/  worktree discovery, doctor, tune, prewarm, sweep, protect, Tailscale exposure
   coolant-cli/        the `coolant` binary
+  coolant-app/        GPUI desktop dashboard
 ```
 
 ## Data flow
@@ -39,6 +41,18 @@ classify::label ──► profile::Recorder ──► profile::Run (JSON) ──
 
 Each process belongs to the **session** of its nearest agent ancestor
 (`claude:1234`), so a `git` run by an agent counts against that agent.
+
+## Workspace layer
+
+`coolant-workspace` acts on what the profiler finds. Every action goes through
+the same guards:
+
+1. **Protected paths** from `~/.config/coolant/config.json` (`coolant protect`).
+2. **In use**: a process has its working directory inside, or names the
+   folder on its command line (`--env-file=/that/worktree/.env`).
+3. **Exposed**: a process listens on a port that `tailscale serve` forwards to.
+4. **Scope**: only linked worktrees and known artifact folders, never main
+   checkouts, home or code roots (unless `--force`).
 
 ## Adding a platform
 

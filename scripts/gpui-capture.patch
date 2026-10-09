@@ -1,0 +1,103 @@
+diff -ru a/src/platform/mac/metal_renderer.rs b/src/platform/mac/metal_renderer.rs
+--- a/src/platform/mac/metal_renderer.rs	2006-07-24 05:21:28
++++ b/src/platform/mac/metal_renderer.rs	2026-10-10 00:27:43
+@@ -144,6 +144,9 @@
+         layer.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+         layer.set_opaque(false);
+         layer.set_maximum_drawable_count(3);
++        if std::env::var_os("GPUI_CAPTURE").is_some() {
++            layer.set_framebuffer_only(false);
++        }
+         unsafe {
+             let _: () = msg_send![&*layer, setAllowsNextDrawableTimeout: NO];
+             let _: () = msg_send![&*layer, setNeedsDisplayOnBoundsChange: YES];
+@@ -385,6 +388,25 @@
+                     let block = block.copy();
+                     command_buffer.add_completed_handler(&block);
+ 
++                    if let Some(path) = std::env::var_os("GPUI_CAPTURE") {
++                        command_buffer.commit();
++                        command_buffer.wait_until_completed();
++                        let tex = drawable.texture();
++                        let (w, h) = (tex.width() as usize, tex.height() as usize);
++                        let mut buf = vec![0u8; w * h * 4];
++                        tex.get_bytes(
++                            buf.as_mut_ptr() as *mut std::ffi::c_void,
++                            (w * 4) as u64,
++                            metal::MTLRegion {
++                                origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
++                                size: metal::MTLSize { width: w as u64, height: h as u64, depth: 1 },
++                            },
++                            0,
++                        );
++                        capture_bmp(std::path::Path::new(&path), w, h, &buf);
++                        drawable.present();
++                        return;
++                    }
+                     if self.presents_with_transaction {
+                         command_buffer.commit();
+                         command_buffer.wait_until_scheduled();
+@@ -1352,4 +1374,28 @@
+ pub struct SurfaceBounds {
+     pub bounds: Bounds<ScaledPixels>,
+     pub content_mask: ContentMask<ScaledPixels>,
++}
++
++
++/// Writes BGRA pixels as a top-down 32-bit BMP (temporary capture patch).
++fn capture_bmp(path: &std::path::Path, w: usize, h: usize, bgra: &[u8]) {
++    let mut out = Vec::with_capacity(54 + bgra.len());
++    let size = 54 + bgra.len() as u32;
++    out.extend_from_slice(b"BM");
++    out.extend_from_slice(&size.to_le_bytes());
++    out.extend_from_slice(&0u32.to_le_bytes());
++    out.extend_from_slice(&54u32.to_le_bytes());
++    out.extend_from_slice(&40u32.to_le_bytes());
++    out.extend_from_slice(&(w as i32).to_le_bytes());
++    out.extend_from_slice(&(-(h as i32)).to_le_bytes());
++    out.extend_from_slice(&1u16.to_le_bytes());
++    out.extend_from_slice(&32u16.to_le_bytes());
++    out.extend_from_slice(&0u32.to_le_bytes());
++    out.extend_from_slice(&(bgra.len() as u32).to_le_bytes());
++    out.extend_from_slice(&[0u8; 16]);
++    out.extend_from_slice(bgra);
++    let tmp = path.with_extension("tmp");
++    if std::fs::write(&tmp, &out).is_ok() {
++        let _ = std::fs::rename(&tmp, path);
++    }
+ }
+diff -ru a/src/platform/mac/window.rs b/src/platform/mac/window.rs
+--- a/src/platform/mac/window.rs	2006-07-24 05:21:28
++++ b/src/platform/mac/window.rs	2026-10-10 00:36:05
+@@ -474,9 +474,21 @@
+     }
+ 
+     fn start_display_link(&mut self) {
++        // Capture patch: drive frames from a timer so hidden or locked-screen
++        // windows still render.
++        if std::env::var_os("GPUI_CAPTURE").is_some() {
++            static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++            if !STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
++                let view = self.native_view.as_ptr() as usize;
++                std::thread::spawn(move || loop {
++                    std::thread::sleep(std::time::Duration::from_millis(500));
++                    unsafe { dispatch_async_f(dispatch_get_main_queue(), view as *mut c_void, Some(step)) };
++                });
++            }
++        }
+         self.stop_display_link();
+         unsafe {
+-            if !self
++            if std::env::var_os("GPUI_CAPTURE").is_none() && !self
+                 .native_window
+                 .occlusionState()
+                 .contains(NSWindowOcclusionState::NSWindowOcclusionStateVisible)
+@@ -1915,7 +1927,7 @@
+         {
+             lock.move_traffic_light();
+             lock.start_display_link();
+-        } else {
++        } else if std::env::var_os("GPUI_CAPTURE").is_none() {
+             lock.stop_display_link();
+         }
+     }
