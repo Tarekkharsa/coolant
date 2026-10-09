@@ -15,13 +15,16 @@ pub type OnSample = Box<dyn FnMut(&Sample) + Send>;
 
 pub struct Options {
     pub interval: Duration,
+    /// Keep at most this many samples on the timeline (oldest dropped), for
+    /// long-running sessions such as a UI. `None` keeps everything.
+    pub max_samples: Option<usize>,
     /// Called after every sample, e.g. for live output.
     pub on_sample: Option<OnSample>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { interval: Duration::from_secs(1), on_sample: None }
+        Options { interval: Duration::from_secs(1), max_samples: None, on_sample: None }
     }
 }
 
@@ -139,7 +142,7 @@ pub struct Recorder {
 impl Recorder {
     /// Takes a baseline and starts sampling on a background thread.
     pub fn start(backend: Arc<dyn Backend>, opts: Options) -> coolant_platform::Result<Recorder> {
-        let mut state = State::new(backend, opts)?;
+        let mut state = Session::new(backend, opts)?;
         let (tx, rx) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("coolant-profile".into())
@@ -189,7 +192,10 @@ fn key(l: &Labeled) -> Key {
     (l.process.pid, l.process.start_ms)
 }
 
-struct State {
+/// A profiling session driven by the caller: call [`Session::sample`] on
+/// your own schedule and [`Session::snapshot`] whenever you want results.
+/// [`Recorder`] wraps one on a background thread.
+pub struct Session {
     backend: Arc<dyn Backend>,
     opts: Options,
     sensors: Option<Box<dyn SensorReader>>,
@@ -205,8 +211,9 @@ struct State {
     attributed: Duration,
 }
 
-impl State {
-    fn new(backend: Arc<dyn Backend>, opts: Options) -> coolant_platform::Result<State> {
+impl Session {
+    /// Takes a baseline; the first [`Session::sample`] measures from here.
+    pub fn new(backend: Arc<dyn Backend>, opts: Options) -> coolant_platform::Result<Session> {
         let mut warnings = Vec::new();
         let mut sensors = backend.sensors().map_err(|e| warnings.push(format!("sensors unavailable: {e}"))).ok();
         let mut spawns =
@@ -227,7 +234,7 @@ impl State {
             warnings,
             ..Default::default()
         };
-        Ok(State {
+        Ok(Session {
             backend,
             opts,
             sensors,
@@ -244,8 +251,9 @@ impl State {
         })
     }
 
-    fn sample(&mut self) {
-        let (Ok(procs), Ok(cpu)) = (self.backend.processes(), self.backend.cpu()) else { return };
+    /// Takes one sample. Returns false if the platform could not be read.
+    pub fn sample(&mut self) -> bool {
+        let (Ok(procs), Ok(cpu)) = (self.backend.processes(), self.backend.cpu()) else { return false };
         let now = Instant::now();
         let prev = std::mem::take(&mut self.prev);
         let cur: HashMap<Key, Labeled> = classify::label(procs).into_iter().map(|l| (key(&l), l)).collect();
@@ -356,9 +364,14 @@ impl State {
             f(&s);
         }
         self.run.samples.push(s);
+        if let Some(max) = self.opts.max_samples {
+            let excess = self.run.samples.len().saturating_sub(max);
+            self.run.samples.drain(..excess);
+        }
         self.prev = cur;
         self.prev_cpu = cpu;
         self.prev_time = now;
+        true
     }
 
     fn add(&mut self, s: &mut Sample, elapsed: f64, l: &Labeled, cat: Category, d: Duration) {
@@ -375,13 +388,19 @@ impl State {
         }
     }
 
-    fn finish(mut self) -> Run {
-        let mut run = std::mem::take(&mut self.run);
+    /// Ends the session.
+    pub fn finish(self) -> Run {
+        self.snapshot()
+    }
+
+    /// Results so far, without stopping the session.
+    pub fn snapshot(&self) -> Run {
+        let mut run = self.run.clone();
         run.duration_s = self.prev_time.duration_since(self.started).as_secs_f64();
         run.unattributed_cpu_s = (run.busy_cpu_s - self.attributed.as_secs_f64()).max(0.0);
 
-        run.categories = self.cats.drain().map(|(c, u)| Usage { key: c.as_str().into(), ..u }).collect();
-        run.sessions = self.sessions.drain().map(|(k, u)| Usage { key: k, ..u }).collect();
+        run.categories = self.cats.iter().map(|(c, u)| Usage { key: c.as_str().into(), ..u.clone() }).collect();
+        run.sessions = self.sessions.iter().map(|(k, u)| Usage { key: k.clone(), ..u.clone() }).collect();
         let by_cpu = |a: &Usage, b: &Usage| b.cpu_s.total_cmp(&a.cpu_s);
         run.categories.sort_by(by_cpu);
         run.sessions.sort_by(by_cpu);
@@ -552,7 +571,7 @@ mod tests {
             cpu: vec![0, 400, 1100],
             i: Mutex::new(0),
         });
-        let rec = Recorder::start(fake.clone(), Options { interval: ms(20), on_sample: None }).unwrap();
+        let rec = Recorder::start(fake.clone(), Options { interval: ms(20), ..Default::default() }).unwrap();
         while *fake.i.lock().unwrap() < 3 {
             std::thread::sleep(ms(5));
         }

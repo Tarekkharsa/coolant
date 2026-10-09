@@ -1,0 +1,18 @@
+[package]
+name = "coolant-app"
+description = "Live desktop dashboard for coolant, built with GPUI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "coolant-app"
+path = "src/main.rs"
+
+[dependencies]
+coolant-platform.workspace = true
+coolant-core.workspace = true
+# runtime_shaders: compile Metal shaders at launch, so building needs only the
+# Xcode command line tools rather than full Xcode.
+gpui = { version = "=0.2.2", features = ["runtime_shaders"] }

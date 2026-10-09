@@ -35,7 +35,20 @@ coolant sensors                      # temperature / power / fan readings
 coolant bench --preset quick         # reproducible agent-like workloads
 ```
 
-Example (Mac mini M4):
+### Desktop dashboard
+
+`coolant-app` is a live dashboard built with [GPUI](https://gpui.rs) (Zed's GPU
+UI framework): temperature, power, busy cores and fan with sparklines, where the
+CPU is going right now (OS overhead in orange), findings, agent sessions and top
+processes. It redraws only when new data arrives, about 0.5% CPU.
+
+```sh
+cargo run --release -p coolant-app
+```
+
+Building it needs only the Xcode command line tools (shaders compile at launch).
+
+Example CLI output (Mac mini M4):
 
 ```
 Findings

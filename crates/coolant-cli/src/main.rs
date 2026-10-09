@@ -84,6 +84,7 @@ fn profile(duration: u64, interval: u64, out: Option<PathBuf>, quiet: bool) -> R
     let opts = Options {
         interval: Duration::from_millis(interval.max(100)),
         on_sample: (!quiet).then(|| Box::new(live) as OnSample),
+        ..Default::default()
     };
     let what =
         if duration == 0 { "until ctrl-c".to_string() } else { format!("for {duration}s (ctrl-c to stop early)") };

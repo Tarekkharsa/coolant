@@ -302,7 +302,10 @@ impl Bencher {
     }
 
     fn start_profiler(&self, on_sample: Option<OnSample>) -> Result<Recorder> {
-        Ok(Recorder::start(self.backend.clone(), Options { interval: self.cfg.interval, on_sample })?)
+        Ok(Recorder::start(
+            self.backend.clone(),
+            Options { interval: self.cfg.interval, on_sample, ..Default::default() },
+        )?)
     }
 
     fn run_case(
