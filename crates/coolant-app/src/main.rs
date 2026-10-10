@@ -4,7 +4,12 @@
 //! publishes a snapshot; the UI picks it up on a timer and re-renders. GPUI
 //! only redraws on `notify`, so the dashboard costs almost nothing between
 //! ticks, which matters for a tool whose job is to find heat.
+//!
+//! The app lives in the menu bar: closing the window keeps it sampling, and
+//! the menu bar item (or the Dock icon) brings the dashboard back.
 
+mod fixes;
+mod menubar;
 mod stacks;
 mod theme;
 mod widgets;
@@ -13,8 +18,8 @@ use coolant_core::classify::Category;
 use coolant_core::profile::{Options, Run, Session};
 use coolant_core::report::{self, Severity};
 use gpui::{
-    App, Application, Bounds, Context, FontWeight, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions,
-    div, prelude::*, px, size,
+    App, Application, Bounds, Context, Entity, FontWeight, KeyBinding, Menu, MenuItem, SharedString, TitlebarOptions,
+    Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
 };
 use stacks::Stack;
 use std::sync::{Arc, Mutex};
@@ -28,6 +33,10 @@ const HISTORY: usize = 120;
 const NOW_WINDOW: usize = 5;
 /// Seconds between refreshes of the leftover-process groups (runs lsof).
 const STACKS_EVERY: u64 = 5;
+/// Seconds between re-runs of the Fixes checks (git, mdutil, tmutil).
+const CHECKS_EVERY: u64 = 300;
+
+actions!(coolant, [Quit, CloseWindow]);
 
 /// What the sampler thread hands to the UI.
 struct Update {
@@ -35,40 +44,35 @@ struct Update {
     stacks: Option<Vec<Stack>>,
 }
 
-struct Dashboard {
-    shared: Arc<Mutex<Option<Update>>>,
+pub struct Dashboard {
     run: Option<Run>,
     stacks: Vec<Stack>,
     /// Stack whose Stop button was clicked once and awaits confirmation.
     confirm: Option<String>,
     status: Option<SharedString>,
     error: Option<String>,
+    fixes: fixes::Fixes,
 }
 
 impl Dashboard {
-    fn new(cx: &mut Context<Self>) -> Self {
-        let shared = Arc::new(Mutex::new(None));
-        let error = start_sampler(shared.clone()).err();
-        cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                let alive = this.update(cx, |d, cx| {
-                    let update = d.shared.lock().unwrap().take();
-                    if let Some(u) = update {
-                        d.run = Some(u.run);
-                        if let Some(s) = u.stacks {
-                            d.stacks = s;
-                        }
-                        cx.notify();
-                    }
-                });
-                if alive.is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
-        Dashboard { shared, run: None, stacks: Vec::new(), confirm: None, status: None, error }
+    fn new(error: Option<String>, cx: &mut Context<Self>) -> Self {
+        let mut d = Dashboard {
+            run: None,
+            stacks: Vec::new(),
+            confirm: None,
+            status: None,
+            error,
+            fixes: fixes::Fixes::default(),
+        };
+        d.refresh_checks(cx);
+        d
+    }
+
+    fn apply(&mut self, u: Update) {
+        self.run = Some(u.run);
+        if let Some(s) = u.stacks {
+            self.stacks = s;
+        }
     }
 }
 
@@ -201,6 +205,7 @@ impl Render for Dashboard {
             .flex_col()
             .gap_4()
             .child(header(self.run.as_ref()))
+            .child(self.fixes_card(cx))
             .child(body)
             .children(leftovers)
     }
@@ -391,31 +396,180 @@ fn placeholder(msg: String) -> gpui::AnyElement {
     div().pt_8().text_color(MUTED).child(SharedString::from(msg)).into_any_element()
 }
 
+/// What the menu bar shows: the title next to the icon, a summary line and
+/// the main cause of heat, if one stands out.
+fn menu_lines(run: &Run) -> (String, String, String) {
+    let Some(last) = run.samples.last() else { return ("…".into(), String::new(), String::new()) };
+    let sn = &last.sensors;
+    let summary = format!("CPU {:.0}°C · {:.1} W · {:.1} busy cores", sn.cpu_temp_c, sn.cpu_power_w, last.busy_cores);
+    let recent = &run.samples[run.samples.len().saturating_sub(NOW_WINDOW)..];
+    let top = Category::ALL
+        .iter()
+        .map(|c| {
+            (*c, recent.iter().map(|s| s.categories.get(c).copied().unwrap_or(0.0)).sum::<f64>() / recent.len() as f64)
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1));
+    let cause = match top {
+        Some((c, cores)) if cores >= 0.5 => format!("{} is using {cores:.1} cores", friendly(c)),
+        _ => String::new(),
+    };
+    (format!("{:.0}°", sn.cpu_temp_c), summary, cause)
+}
+
+/// Category names for people who don't know the daemons.
+fn friendly(c: Category) -> &'static str {
+    match c {
+        Category::Agent => "Coding agents",
+        Category::AgentHost => "Editors and terminals",
+        Category::LanguageServer => "Language servers",
+        Category::Build => "Builds",
+        Category::PackageManager => "Package installs",
+        Category::Vcs => "git",
+        Category::Search => "Search tools",
+        Category::Runtime => "Dev servers and scripts",
+        Category::Indexer => "Spotlight indexing",
+        Category::Security => "Security checks",
+        Category::FsDaemon => "File-change tracking",
+        Category::BackupSync => "Backup and sync",
+        Category::ContainerVm => "Docker / VMs",
+        Category::Browser => "The browser",
+        Category::Desktop => "The desktop",
+        Category::Kernel => "The system",
+        Category::Other => "Other apps",
+    }
+}
+
+fn window_options(cx: &App, screenshot: bool) -> WindowOptions {
+    let mut bounds = Bounds::centered(None, size(px(1120.), px(860.)), cx);
+    if screenshot && let Some(display) = cx.primary_display() {
+        let screen = display.bounds();
+        bounds.size.height = px(1300.).min(screen.size.height - px(60.));
+        bounds.origin = gpui::point(screen.origin.x + screen.size.width - bounds.size.width, screen.origin.y + px(40.));
+    }
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions { title: Some("coolant".into()), ..Default::default() }),
+        ..Default::default()
+    }
+}
+
+/// Brings the dashboard window forward, opening it if it was closed.
+fn show_dashboard(dash: &Entity<Dashboard>, cx: &mut App) {
+    match cx.windows().first() {
+        Some(w) => {
+            let _ = w.update(cx, |_, window, _| window.activate_window());
+        }
+        None => {
+            let dash = dash.clone();
+            let _ = cx.open_window(window_options(cx, false), move |_, _| dash);
+        }
+    }
+    cx.activate(true);
+}
+
+/// Apps started from Finder get a minimal PATH; add the usual places for
+/// git and the Tailscale CLI, which the safety checks rely on.
+fn extend_path() {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut parts: Vec<&str> = path.split(':').filter(|p| !p.is_empty()).collect();
+    for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"] {
+        if !parts.contains(&extra) {
+            parts.push(extra);
+        }
+    }
+    // SAFETY: called first thing in main, before any other thread exists.
+    unsafe { std::env::set_var("PATH", parts.join(":")) };
+}
+
 fn main() {
+    extend_path();
     // COOLANT_SCREENSHOT_SECS=N: a taller window at the screen's right edge
     // that quits after N seconds. Used with scripts/screenshot.sh, which
     // builds against a GPUI patched to save its frames.
     let screenshot_secs: Option<u64> = std::env::var("COOLANT_SCREENSHOT_SECS").ok().and_then(|s| s.parse().ok());
-    Application::new().run(move |cx: &mut App| {
-        let mut bounds = Bounds::centered(None, size(px(1120.), px(860.)), cx);
-        if screenshot_secs.is_some()
-            && let Some(display) = cx.primary_display()
+    let app = Application::new();
+    // Clicking the Dock icon with the window closed: same as "Open coolant".
+    app.on_reopen(|_| menubar::OPEN_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst));
+    app.run(move |cx: &mut App| {
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &CloseWindow, cx| {
+            for w in cx.windows() {
+                let _ = w.update(cx, |_, window, _| window.remove_window());
+            }
+        });
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None), KeyBinding::new("cmd-w", CloseWindow, None)]);
+        cx.set_menus(vec![Menu {
+            name: "coolant".into(),
+            items: vec![
+                MenuItem::action("Close Window", CloseWindow),
+                MenuItem::separator(),
+                MenuItem::action("Quit coolant", Quit),
+            ],
+        }]);
+
+        let shared = Arc::new(Mutex::new(None));
+        let error = start_sampler(shared.clone()).err();
+        let dash = cx.new(|cx| Dashboard::new(error, cx));
+        let screenshot = screenshot_secs.is_some();
         {
-            let screen = display.bounds();
-            bounds.size.height = px(1300.).min(screen.size.height - px(60.));
-            bounds.origin =
-                gpui::point(screen.origin.x + screen.size.width - bounds.size.width, screen.origin.y + px(40.));
+            let dash = dash.clone();
+            cx.open_window(window_options(cx, screenshot), move |_, _| dash).expect("failed to open window");
         }
-        let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions { title: Some("coolant".into()), ..Default::default() }),
-            ..Default::default()
-        };
-        cx.open_window(options, |_, cx| cx.new(Dashboard::new)).expect("failed to open window");
-        cx.on_window_closed(|cx| cx.quit()).detach();
         cx.activate(true);
+        let menubar = (!screenshot).then(menubar::MenuBar::new);
+
+        // The app's heartbeat: hand new samples to the dashboard and the menu
+        // bar, open the window on request, re-check the setup now and then.
+        let heartbeat_dash = dash.clone();
+        cx.spawn(async move |cx| {
+            let dash = heartbeat_dash;
+            let mut ticks = 0u64;
+            loop {
+                cx.background_executor().timer(Duration::from_millis(250)).await;
+                ticks += 1;
+                let alive = cx.update(|cx| {
+                    if menubar::OPEN_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                        show_dashboard(&dash, cx);
+                    }
+                    let update = shared.lock().unwrap().take();
+                    if let Some(u) = update {
+                        if let Some(mb) = &menubar {
+                            let (title, summary, cause) = menu_lines(&u.run);
+                            mb.update(&title, &summary, &cause);
+                        }
+                        dash.update(cx, |d, cx| {
+                            d.apply(u);
+                            cx.notify();
+                        });
+                    }
+                    if ticks.is_multiple_of(CHECKS_EVERY * 4) {
+                        dash.update(cx, |d, cx| d.refresh_checks(cx));
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
 
         if let Some(secs) = screenshot_secs {
+            // COOLANT_SCREENSHOT_SCRIPT="4:fix:Spotlight;6:fix:Spotlight;10:undo"
+            // clicks Fix buttons at the given seconds, for demo recordings.
+            if let Ok(script) = std::env::var("COOLANT_SCREENSHOT_SCRIPT") {
+                let dash = dash.clone();
+                cx.spawn(async move |cx| {
+                    let mut at = 0.0;
+                    for (t, step) in script.split(';').filter_map(|s| s.split_once(':')) {
+                        let t: f64 = t.parse().unwrap_or(at);
+                        cx.background_executor().timer(Duration::from_secs_f64((t - at).max(0.0))).await;
+                        at = t;
+                        let _ = cx.update(|cx| dash.update(cx, |d, cx| d.script_step(step, cx)));
+                    }
+                })
+                .detach();
+            }
+            cx.on_window_closed(|cx| cx.quit()).detach();
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(Duration::from_secs(secs)).await;
                 let _ = cx.update(|cx| cx.quit());

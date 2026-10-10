@@ -30,14 +30,47 @@ pub struct Check {
     pub detail: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub fix: String,
+    /// What the app's Fix button does, when the fix can be automated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<Action>,
+}
+
+/// A fix coolant can apply itself (see [`crate::actions`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Action {
+    /// Move these folders out of Spotlight's reach with [`crate::tune`].
+    Tune { paths: Vec<PathBuf> },
+    /// Exclude these folders from Time Machine.
+    ExcludeFromBackups { paths: Vec<PathBuf> },
+    /// Clone build artifacts into these worktrees, and install the
+    /// post-checkout hook in their repositories for future ones.
+    Prewarm { worktrees: Vec<PathBuf>, repos: Vec<PathBuf> },
+    /// Delete build artifacts in idle or merged worktrees with [`crate::sweep`].
+    Sweep,
 }
 
 fn check(status: Status, title: impl Into<String>, detail: impl Into<String>, fix: impl Into<String>) -> Check {
-    Check { status, title: title.into(), detail: detail.into(), fix: fix.into() }
+    Check { status, title: title.into(), detail: detail.into(), fix: fix.into(), action: None }
+}
+
+impl Check {
+    fn with(mut self, action: Action) -> Check {
+        self.action = Some(action);
+        self
+    }
 }
 
 /// Runs every check. `sample` is how long to watch running processes.
 pub fn run(cfg: &Config, worktrees: &[Worktree], sample: Duration) -> Vec<Check> {
+    let mut out = setup(cfg, worktrees);
+    processes(cfg, sample, &mut out);
+    out
+}
+
+/// The checks of folders and settings, without watching processes (the app
+/// watches those itself).
+pub fn setup(cfg: &Config, worktrees: &[Worktree]) -> Vec<Check> {
     let mut out = Vec::new();
     let linked: Vec<&Worktree> = worktrees.iter().filter(|w| !w.main).collect();
     out.push(check(
@@ -55,7 +88,6 @@ pub fn run(cfg: &Config, worktrees: &[Worktree], sample: Duration) -> Vec<Check>
     icloud(cfg, &mut out);
     stale(cfg, &linked, &mut out);
     prewarm(&linked, worktrees, &mut out);
-    processes(cfg, sample, &mut out);
     out
 }
 
@@ -94,12 +126,15 @@ fn spotlight(linked: &[&Worktree], out: &mut Vec<Check>) {
             linked.iter().filter(|w| w.path.parent() == Some(&dir)).map(|w| w.path.clone()).collect()
         };
         let fix = targets.iter().map(|t| shell_quote(&tilde(t))).collect::<Vec<_>>().join(" ");
-        out.push(check(
-            Status::Warn,
-            format!("Spotlight indexes {n} worktree(s) in {}", tilde(&dir)),
-            "Every file agents write there (dependencies, build output) gets re-indexed: in our benchmark ~30× more background CPU than an excluded folder.",
-            format!("coolant tune {fix}"),
-        ));
+        out.push(
+            check(
+                Status::Warn,
+                format!("Spotlight indexes {n} worktree(s) in {}", tilde(&dir)),
+                "Every file agents write there (dependencies, build output) gets re-indexed: in our benchmark ~30× more background CPU than an excluded folder.",
+                format!("coolant tune {fix}"),
+            )
+            .with(Action::Tune { paths: targets }),
+        );
     }
     if indexed == 0 && !linked.is_empty() {
         out.push(check(Status::Ok, "Agent worktrees are excluded from Spotlight", "", ""));
@@ -121,12 +156,15 @@ fn time_machine(linked: &[&Worktree], out: &mut Vec<Check>) {
             .output()
             .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("[Excluded]"));
         if !excluded {
-            out.push(check(
-                Status::Warn,
-                format!("Time Machine backs up {}", tilde(&dir)),
-                "Backups re-read every changed file in agent worktrees.",
-                format!("tmutil addexclusion {}", shell_quote(&dir.display().to_string())),
-            ));
+            out.push(
+                check(
+                    Status::Warn,
+                    format!("Time Machine backs up {}", tilde(&dir)),
+                    "Backups re-read every changed file in agent worktrees.",
+                    format!("tmutil addexclusion {}", shell_quote(&dir.display().to_string())),
+                )
+                .with(Action::ExcludeFromBackups { paths: vec![dir] }),
+            );
         }
     }
 }
@@ -157,33 +195,42 @@ fn stale(cfg: &Config, linked: &[&Worktree], out: &mut Vec<Check>) {
         linked.iter().filter(|w| (w.merged || w.idle_days() >= 7.0) && !cfg.is_protected(&w.path)).collect();
     let with_artifacts = stale.iter().filter(|w| !artifacts(&w.path).is_empty()).count();
     if with_artifacts > 0 {
-        out.push(check(
-            Status::Info,
-            format!("{with_artifacts} merged or idle worktree(s) still hold build artifacts"),
-            "target/ and node_modules in finished worktrees take disk space and keep being scanned.",
-            "coolant sweep",
-        ));
+        out.push(
+            check(
+                Status::Info,
+                format!("{with_artifacts} merged or idle worktree(s) still hold build artifacts"),
+                "target/ and node_modules in finished worktrees take disk space and keep being scanned.",
+                "coolant sweep",
+            )
+            .with(Action::Sweep),
+        );
     }
 }
 
 fn prewarm(linked: &[&Worktree], all: &[Worktree], out: &mut Vec<Check>) {
-    let mut cold = 0;
+    let (mut cold, mut repos) = (Vec::new(), Vec::new());
     for w in linked.iter().filter(|w| w.idle_days() < 7.0) {
         let Some(main) = all.iter().find(|m| m.main && m.repo == w.repo) else { continue };
         let missing = artifacts(&main.path)
             .iter()
             .any(|rel| !w.path.join(rel).exists() && w.path.join(rel).parent().is_some_and(Path::is_dir));
         if missing {
-            cold += 1;
+            cold.push(w.path.clone());
+            if !repos.contains(&main.path) {
+                repos.push(main.path.clone());
+            }
         }
     }
-    if cold > 0 {
-        out.push(check(
-            Status::Info,
-            format!("{cold} active worktree(s) lack build artifacts the main checkout has"),
-            "Their first build or install starts from scratch: every core busy for minutes, per worktree.",
-            "coolant prewarm <worktree>   (or coolant prewarm --install-hook <repo> to do it automatically)",
-        ));
+    if !cold.is_empty() {
+        out.push(
+            check(
+                Status::Info,
+                format!("{} active worktree(s) lack build artifacts the main checkout has", cold.len()),
+                "Their first build or install starts from scratch: every core busy for minutes, per worktree.",
+                "coolant prewarm <worktree>   (or coolant prewarm --install-hook <repo> to do it automatically)",
+            )
+            .with(Action::Prewarm { worktrees: cold, repos }),
+        );
     }
 }
 

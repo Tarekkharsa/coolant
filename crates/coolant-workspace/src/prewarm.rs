@@ -75,7 +75,10 @@ pub const HOOK: &str = r#"#!/bin/sh
 # coolant: prewarm new worktrees with the main checkout's build artifacts.
 case "$1" in
   *[!0]*) ;; # an ordinary checkout
-  *) command -v coolant >/dev/null 2>&1 && (coolant prewarm "$(pwd)" >/dev/null 2>&1 &) ;;
+  *) # The CLI on PATH, or the one inside the app.
+    for c in coolant /Applications/Coolant.app/Contents/MacOS/coolant "$HOME/Applications/Coolant.app/Contents/MacOS/coolant"; do
+      if command -v "$c" >/dev/null 2>&1; then ("$c" prewarm "$(pwd)" >/dev/null 2>&1 &); break; fi
+    done ;;
 esac
 "#;
 
@@ -87,7 +90,7 @@ pub fn install_hook(repo: &Path) -> Result<PathBuf> {
     let path = hooks.join("post-checkout");
     if path.exists() {
         let current = std::fs::read_to_string(&path).unwrap_or_default();
-        if current.contains("coolant prewarm") {
+        if current.contains("coolant prewarm") || current.contains("# coolant: prewarm") {
             return Ok(path);
         }
         bail!("{} already exists; add this to it:\n\n{HOOK}", tilde(&path));

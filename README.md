@@ -32,6 +32,17 @@ From [`docs/results`](docs/results/) and [`docs/findings.md`](docs/findings.md):
 
 ## Install
 
+**Mac app (easiest):** download `Coolant-<version>.dmg` from the
+[latest release](https://github.com/Tarekkharsa/coolant/releases), open it and
+drag Coolant to Applications. It includes the `coolant` command-line tool too
+(`/Applications/Coolant.app/Contents/MacOS/coolant`).
+
+> The beta isn't notarized by Apple yet, so the first launch shows a warning.
+> Open **System Settings → Privacy & Security** and click **Open Anyway**
+> (once). Signed, notarized builds will open without it.
+
+**Command line only:**
+
 ```sh
 cargo install --git https://github.com/Tarekkharsa/coolant coolant-cli
 ```
@@ -74,24 +85,33 @@ coolant protect ~/demo                      # never touch this path
 protected paths; never touch folders a running process uses; never stop
 processes that serve ports exposed through Tailscale Serve/Funnel.
 
-## Desktop dashboard
+## The Mac app
 
-![coolant-app dashboard](docs/img/dashboard.png)
+![Coolant app](docs/img/dashboard.png)
 
-`coolant-app` is a live dashboard built with [GPUI](https://gpui.rs), Zed's GPU
-UI framework. It shows:
-- temperature, power, busy cores and fan, with sparklines
-- where the CPU is going right now, with OS overhead in orange
-- findings, agent sessions and top processes
-- leftover dev processes grouped by project, with a two-step Stop
+Coolant is for everyone who runs agents, not only people at home in a terminal:
+- **Fixes, one click each.** It finds the git worktrees your agents create,
+  whichever tool made them, and offers the fixes above as buttons: exclude from
+  Spotlight, exclude from Time Machine, prewarm, clean up. Each one explains
+  what it will do before it does it, and Spotlight and Time Machine changes
+  have an Undo.
+- **Menu bar.** The CPU temperature sits in the menu bar, and the menu says
+  what's heating the machine right now ("Spotlight indexing is using 1.9
+  cores"). Closing the window keeps Coolant running there.
+- **Live dashboard.** Temperature, power, busy cores and fan; where the CPU
+  is going, with OS overhead in orange; agent sessions and top processes.
+- **Leftovers.** Dev servers that outlived their agent, grouped by project,
+  with a two-step Stop.
 
-It only redraws when new data arrives, at about 0.5% CPU.
+It only redraws when new data arrives, at about 0.5% CPU. Built with
+[GPUI](https://gpui.rs), Zed's GPU UI framework.
 
 ```sh
-cargo run --release -p coolant-app
+cargo run --release -p coolant-app     # run from source
+scripts/package-macos.sh               # build Coolant.app and a .dmg
 ```
 
-Building it needs only the Xcode command line tools; the shaders compile at
+Building needs only the Xcode command line tools; the shaders compile at
 launch. `scripts/screenshot.sh` regenerates the image above.
 
 ## How it works
@@ -114,16 +134,18 @@ See [docs/architecture.md](docs/architecture.md) for details.
 
 | | profiler | sensors | workspace tools | app |
 |---|---|---|---|---|
-| macOS | ✅ | ✅ | ✅ | ✅ |
+| macOS | ✅ | ✅ | ✅ | ✅ menu bar app |
 | Linux | ✅ | ✅ hwmon/RAPL (when readable) | ✅ (tune is macOS-only) | planned |
 | Windows | planned | planned | – | planned |
 
 ## Roadmap
 
 1. ✅ Profiler, sensors, benchmarks
-2. ✅ Workspace layer: tune, prewarm, sweep, doctor, desktop app
-3. Shared language servers and watchers across worktrees
-4. Filesystem layer: copy-on-write agent workspaces (FSKit on macOS, overlayfs
+2. ✅ Workspace layer: tune, prewarm, sweep, doctor
+3. ✅ Mac app: menu bar, one-click fixes with Undo (beta); next: signed and
+   notarized builds, start at login, notifications when the machine runs hot
+4. Shared language servers and watchers across worktrees
+5. Filesystem layer: copy-on-write agent workspaces (FSKit on macOS, overlayfs
    on Linux, ProjFS / Dev Drive on Windows)
 
 ## License

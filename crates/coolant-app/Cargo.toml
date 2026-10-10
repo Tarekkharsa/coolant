@@ -18,3 +18,8 @@ libc.workspace = true
 # runtime_shaders: compile Metal shaders at launch, so building needs only the
 # Xcode command line tools rather than full Xcode.
 gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
+
+# The menu bar item talks to AppKit directly (same crates GPUI uses).
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"

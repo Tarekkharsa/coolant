@@ -12,7 +12,6 @@ use crate::config::{Config, canonical, home, tilde};
 use crate::inuse::InUse;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Where tuned folders physically live.
 pub fn spaces_dir() -> PathBuf {
@@ -135,9 +134,51 @@ pub fn undo(dir: &Path) -> Result<Outcome> {
 /// Marks a folder as excluded from Time Machine (sticky, no root needed).
 /// Harmless when Time Machine isn't set up.
 fn exclude_from_backups(p: &Path) {
-    if cfg!(target_os = "macos") {
-        let _ = Command::new("tmutil").arg("addexclusion").arg(p).output();
+    let _ = set_backup_excluded(p, true);
+}
+
+/// The extended attribute behind `tmutil addexclusion` (a "sticky"
+/// exclusion that moves with the item).
+#[cfg(target_os = "macos")]
+const BACKUP_EXCLUDE_XATTR: &std::ffi::CStr = c"com.apple.metadata:com_apple_backup_excludeItem";
+/// Its value: the binary plist of the string "com.apple.backupd", byte for
+/// byte what tmutil writes.
+#[cfg(target_os = "macos")]
+const BACKUP_EXCLUDE_VALUE: &[u8] =
+    b"bplist00_\x10\x11com.apple.backupd\x08\0\0\0\0\0\0\x01\x01\0\0\0\0\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x1c";
+
+/// Excludes `p` from Time Machine, or includes it again. Writes the
+/// attribute directly: `tmutil addexclusion` does the same but waits ~11 s
+/// on backupd.
+pub fn set_backup_excluded(p: &Path, excluded: bool) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(p.as_os_str().as_bytes())?;
+        // SAFETY: valid C strings and buffer; position 0 and no options.
+        let r = unsafe {
+            if excluded {
+                libc::setxattr(
+                    path.as_ptr(),
+                    BACKUP_EXCLUDE_XATTR.as_ptr(),
+                    BACKUP_EXCLUDE_VALUE.as_ptr().cast(),
+                    BACKUP_EXCLUDE_VALUE.len(),
+                    0,
+                    0,
+                )
+            } else {
+                libc::removexattr(path.as_ptr(), BACKUP_EXCLUDE_XATTR.as_ptr(), 0)
+            }
+        };
+        let err = std::io::Error::last_os_error();
+        // Removing an exclusion that isn't there is fine.
+        if r != 0 && !(!excluded && err.raw_os_error() == Some(libc::ENOATTR)) {
+            return Err(err);
+        }
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (p, excluded);
+    Ok(())
 }
 
 /// A readable, unique folder name: the home-relative path with `/` → `%`.
@@ -170,6 +211,25 @@ mod tests {
     fn names_are_flat() {
         let d = home().join("Documents/GitHub/app/.claude/worktrees");
         assert_eq!(space_name(&d), "Documents%GitHub%app%.claude%worktrees");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn backup_exclusion_matches_tmutil() {
+        use std::process::Command;
+        // Not a temp folder: /tmp and /var/folders are always excluded.
+        let d = home().join(format!(".coolant/tm-test-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let excluded = || {
+            let out = Command::new("tmutil").arg("isexcluded").arg(&d).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).contains("[Excluded]")
+        };
+        set_backup_excluded(&d, true).unwrap();
+        assert!(excluded());
+        set_backup_excluded(&d, false).unwrap();
+        assert!(!excluded());
+        set_backup_excluded(&d, false).unwrap(); // already included: no error
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

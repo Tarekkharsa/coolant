@@ -9,10 +9,13 @@
 //!   is incremental instead of a full cold compile.
 //! - [`sweep`] deletes build artifacts in worktrees nobody is using anymore.
 //!
+//! - [`actions`] applies a doctor fix in one step, for the app's buttons.
+//!
 //! Everything that changes the disk supports a dry run and refuses to touch
 //! protected paths or folders a running process is using. Unix-only.
 #![cfg(unix)]
 
+pub mod actions;
 pub mod config;
 pub mod discover;
 pub mod doctor;

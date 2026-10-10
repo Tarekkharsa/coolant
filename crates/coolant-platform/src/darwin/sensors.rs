@@ -485,6 +485,9 @@ struct CoalInfo {
 }
 
 const COALITION_TYPE_RESOURCE: u32 = 0;
+/// Most energy a coalition created within one sample interval can plausibly
+/// have used: 25 J is a whole M-series CPU at full load for about a second.
+const MAX_NEW_COALITION_NJ: u64 = 25_000_000_000;
 const NOTIFY_STATUS_OK: u32 = 0;
 
 /// Returns (id, cumulative energy in nJ) for every resource coalition.
@@ -671,8 +674,11 @@ impl Reader {
                 if e >= prev {
                     nj += e - prev;
                 }
-            } else if !first && id > self.coal_max {
-                nj += e; // coalition created since the last sample (IDs are monotonic)
+            } else if !first && id > self.coal_max && e <= MAX_NEW_COALITION_NJ {
+                // Created since the last sample (IDs are monotonic). A launchd
+                // service's coalition can reappear holding energy from runs we
+                // never saw; counting that once showed up as a 1,800 W spike.
+                nj += e;
             }
         }
         self.coal_prev = cur;

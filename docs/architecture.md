@@ -11,9 +11,10 @@ crates/
   coolant-core/       classify (process → category + agent session),
                       profile (Session/Recorder: sampling and attribution), report (text + findings)
   coolant-bench/      reproducible agent-like workloads run under the profiler
-  coolant-workspace/  worktree discovery, doctor, tune, prewarm, sweep, protect, Tailscale exposure
+  coolant-workspace/  worktree discovery, doctor, tune, prewarm, sweep, protect, Tailscale exposure,
+                      actions (one-step fixes with undo, for the app)
   coolant-cli/        the `coolant` binary
-  coolant-app/        GPUI desktop dashboard
+  coolant-app/        GPUI menu bar app: dashboard, Fixes panel, leftovers
 ```
 
 ## Data flow
