@@ -242,15 +242,20 @@ fn sensors(count: u32) -> Result<()> {
     for _ in 0..count {
         std::thread::sleep(Duration::from_secs(1));
         let s = r.read()?;
+        let fans = if s.fan_rpm.is_empty() {
+            "none".to_string()
+        } else {
+            s.fan_rpm.iter().map(|f| format!("{f:.0} rpm")).collect::<Vec<_>>().join(", ")
+        };
         println!(
-            "cpu {:.1}°C (max {:.1})  gpu {:.1}°C  cpu {:.2}W  gpu {:.2}W  soc {:.2}W  fans {:?}  pressure {}",
+            "cpu {:.1}°C (max {:.1})  gpu {:.1}°C  cpu {:.2}W  gpu {:.2}W  soc {:.2}W  fans {}  pressure {}",
             s.cpu_temp_c,
             s.cpu_temp_max_c,
             s.gpu_temp_c,
             s.cpu_power_w,
             s.gpu_power_w,
             s.soc_power_w,
-            s.fan_rpm,
+            fans,
             s.pressure
         );
     }

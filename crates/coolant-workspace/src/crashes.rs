@@ -26,6 +26,11 @@ pub struct Report {
     pub system: bool,
     /// Signal or termination reason, e.g. "SIGABRT" or "Library missing".
     pub reason: String,
+    /// When it crashed, from the report's header. (The file's modification
+    /// time is no good: macOS rewrites old reports.)
+    pub at: Option<SystemTime>,
+    /// Identifies the crash across copies of its report.
+    pub incident: String,
 }
 
 /// A program that crashed at least [`THRESHOLD`] times.
@@ -51,14 +56,22 @@ impl Crashing {
 pub fn recent() -> Vec<Crashing> {
     let now = SystemTime::now();
     let mut reports = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for dir in [home().join("Library/Logs/DiagnosticReports"), PathBuf::from("/Library/Logs/DiagnosticReports")] {
         for (path, modified) in ips_files(&dir) {
+            // A report is never modified before its crash, so old files can
+            // be skipped without reading them.
             if now.duration_since(modified).unwrap_or_default() > WINDOW {
                 continue;
             }
-            if let Some(r) = std::fs::read_to_string(&path).ok().and_then(|t| parse(&t)) {
-                reports.push((r, modified));
+            let Some(r) = std::fs::read_to_string(&path).ok().and_then(|t| parse(&t)) else { continue };
+            let at = r.at.unwrap_or(modified);
+            if now.duration_since(at).unwrap_or_default() > WINDOW
+                || (!r.incident.is_empty() && !seen.insert(r.incident.clone()))
+            {
+                continue;
             }
+            reports.push((r, at));
         }
     }
     summarize(reports)
@@ -94,7 +107,37 @@ pub fn parse(text: &str) -> Option<Report> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    Some(Report { name: name.to_string(), label, system, reason })
+    let at = header.get("timestamp").and_then(Value::as_str).and_then(parse_timestamp);
+    let incident = header.get("incident_id").and_then(Value::as_str).unwrap_or("").to_string();
+    Some(Report { name: name.to_string(), label, system, reason, at, incident })
+}
+
+/// Parses a report timestamp like "2026-10-10 12:13:30.00 +0400".
+fn parse_timestamp(s: &str) -> Option<SystemTime> {
+    let mut parts = s.split(' ');
+    let (date, time, zone) = (parts.next()?, parts.next()?, parts.next()?);
+    let d: Vec<i64> = date.split('-').map(|x| x.parse().ok()).collect::<Option<_>>()?;
+    let t: Vec<f64> = time.split(':').map(|x| x.parse().ok()).collect::<Option<_>>()?;
+    if d.len() != 3 || t.len() != 3 || zone.len() != 5 {
+        return None;
+    }
+    let sign = if zone.starts_with('-') { -1 } else { 1 };
+    let offset = sign * (zone[1..3].parse::<i64>().ok()? * 3600 + zone[3..5].parse::<i64>().ok()? * 60);
+    let secs = days_from_civil(d[0], d[1], d[2]) * 86400 + (t[0] * 3600.0 + t[1] * 60.0) as i64 - offset;
+    let secs = secs as f64 + t[2];
+    (secs >= 0.0).then(|| SystemTime::UNIX_EPOCH + Duration::from_secs_f64(secs))
+}
+
+/// Days since 1970-01-01 of a proleptic Gregorian date (Howard Hinnant's
+/// algorithm).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
 }
 
 fn summarize(reports: Vec<(Report, SystemTime)>) -> Vec<Crashing> {
@@ -139,6 +182,22 @@ mod tests {
         assert_eq!(r.label.as_deref(), Some("homebrew.mxcl.php"));
         assert!(!r.system);
         assert_eq!(r.reason, "SIGABRT");
+    }
+
+    #[test]
+    fn crash_time_comes_from_the_header() {
+        let at = parse_timestamp("2026-10-10 12:13:30.00 +0400").unwrap();
+        // 2026-10-10 08:13:30 UTC
+        assert_eq!(at.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs(), 1_791_620_010);
+        assert_eq!(parse_timestamp("1970-01-01 00:00:00.00 +0000"), Some(SystemTime::UNIX_EPOCH));
+        assert_eq!(parse_timestamp("not a date"), None);
+        let r = parse(&format!(
+            "{{\"name\":\"x\",\"timestamp\":\"2026-10-10 12:13:30.00 +0400\",\"incident_id\":\"ABC\"}}\n{}",
+            r#"{"procName":"x"}"#
+        ))
+        .unwrap();
+        assert_eq!(r.at, Some(at));
+        assert_eq!(r.incident, "ABC");
     }
 
     #[test]
