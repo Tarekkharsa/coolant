@@ -110,7 +110,7 @@ Serve/Funnel, and paths you `coolant protect`, are never offered for stopping.
 `node_modules`. Sweep removes artifact folders from idle or merged linked
 worktrees that no process is using, as a dry run unless `--yes` is passed.
 
-## 6. Endpoint security agents slow down every process and file
+## 6. A Mac with an endpoint security agent was 2–6× slower at starting processes
 
 The M2 Pro runs CrowdStrike Falcon, which company-managed Macs often have. It
 was slower than the M1 and the M4 at everything that starts a process or
@@ -118,7 +118,7 @@ touches a file, although it runs macOS 27 like the M4:
 
 | Quick preset, 1 agent, `.noindex` | M2 Pro + Falcon | M1 | M4 |
 |---|---|---|---|
-| `/usr/bin/true` execs per second | 264 | 1,011 | 1,507 |
+| `/usr/bin/true` execs per second | 267 | 1,019 | 1,502 |
 | warm exec of a new binary | 7.1 ms | 1.5 ms | 2.0 ms |
 | first exec of a new binary | 870 ms | 461 ms | 449 ms |
 | copy a 3,000-file tree (`cp -R`) | 2.3 s | 1.0 s | 0.6 s |
