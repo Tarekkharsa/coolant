@@ -25,6 +25,7 @@ pub enum Undo {
     Tune(Vec<PathBuf>),
     ExcludeFromBackups(Vec<PathBuf>),
     StartService(String),
+    MoveBack { from: PathBuf, to: PathBuf },
 }
 
 /// Applies `action`. Partial success is reported in the message; an error
@@ -102,6 +103,16 @@ pub fn apply(cfg: &Config, action: &Action) -> Result<Done> {
                 undo: None,
             })
         }
+        Action::MoveAside { from, to } => {
+            if to.exists() {
+                bail!("{} already exists", tilde(to));
+            }
+            std::fs::rename(from, to).with_context(|| format!("moving {}", tilde(from)))?;
+            Ok(Done {
+                message: format!("Moved {} to {}.", tilde(from), tilde(to)),
+                undo: Some(Undo::MoveBack { from: to.clone(), to: from.clone() }),
+            })
+        }
         Action::StopService { formula } => {
             brew(&["services", "stop", formula])?;
             Ok(Done {
@@ -131,6 +142,13 @@ pub fn undo(u: &Undo) -> Result<String> {
                 tune::set_backup_excluded(p, false).with_context(|| format!("including {}", tilde(p)))?;
             }
             Ok(format!("Time Machine backs up {} folder(s) again.", paths.len()))
+        }
+        Undo::MoveBack { from, to } => {
+            if to.exists() {
+                bail!("{} exists again; not overwriting it", tilde(to));
+            }
+            std::fs::rename(from, to).with_context(|| format!("moving {} back", tilde(from)))?;
+            Ok(format!("Moved {} back.", tilde(to)))
         }
         Undo::StartService(formula) => {
             brew(&["services", "start", formula])?;
@@ -188,6 +206,18 @@ mod tests {
         undo(done.undo.as_ref().expect("tune can be undone")).unwrap();
         assert!(!std::fs::symlink_metadata(&dir).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(dir.join("wt/file")).unwrap(), "x");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn move_aside_and_back() {
+        let base = std::env::temp_dir().join(format!("coolant-move-{}", std::process::id()));
+        let (from, to) = (base.join(".git"), base.join(".git-moved-by-coolant"));
+        std::fs::create_dir_all(from.join("objects")).unwrap();
+        let done = apply(&Config::default(), &Action::MoveAside { from: from.clone(), to: to.clone() }).unwrap();
+        assert!(!from.exists() && to.join("objects").is_dir());
+        undo(done.undo.as_ref().unwrap()).unwrap();
+        assert!(from.join("objects").is_dir() && !to.exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

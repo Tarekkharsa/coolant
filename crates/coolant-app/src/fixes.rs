@@ -290,6 +290,9 @@ fn compact_text(c: &Check) -> (String, String) {
         Some(Action::StopService { formula }) => {
             (format!("Stop {formula}, which keeps crashing"), first_clause(&c.title))
         }
+        Some(Action::MoveAside { from, .. }) => {
+            ("Stop git from scanning a whole folder".into(), format!("{} makes it one huge repository", tilde(from)))
+        }
         Some(Action::StopProcesses { procs }) => {
             (format!("Stop {} duplicate dev server(s)", procs.len()), first_clause(&c.title))
         }
@@ -303,6 +306,7 @@ fn short_label(a: &Action) -> &'static str {
         Action::Prewarm { .. } => "Prewarm",
         Action::Sweep => "Clean up",
         Action::StopService { .. } | Action::StopProcesses { .. } => "Stop",
+        Action::MoveAside { .. } => "Fix",
     }
 }
 
@@ -334,6 +338,7 @@ fn button_label(a: &Action) -> &'static str {
         Action::Sweep => "Clean up",
         Action::StopService { .. } => "Stop service",
         Action::StopProcesses { .. } => "Stop extra copies",
+        Action::MoveAside { .. } => "Move it aside",
     }
 }
 
@@ -345,6 +350,7 @@ fn confirm_label(a: &Action) -> String {
         Action::Sweep => "Delete".into(),
         Action::StopService { formula } => format!("Stop {formula}"),
         Action::StopProcesses { procs } => format!("Stop {}", procs.len()),
+        Action::MoveAside { from, .. } => format!("Move {}", tilde(from)),
     }
 }
 
@@ -357,5 +363,6 @@ fn explain(a: &Action) -> String {
         Action::Sweep => "Deletes build folders (target/, node_modules, …) in worktrees idle for 7+ days or already merged. Your code and branches stay; a rebuild recreates them.".into(),
         Action::StopService { formula } => format!("Runs brew services stop {formula}: the service stops and won't start at login. It keeps crashing, so it isn't working anyway. Undo starts it again."),
         Action::StopProcesses { .. } => "Asks the later copies to quit (SIGTERM); the first one keeps running. Each process is checked again first, and ones serving a port shared through Tailscale are never stopped.".into(),
+        Action::MoveAside { from, to } => format!("Renames {} to {}. Nothing is deleted, and Undo renames it back. If you keep your dotfiles in this repository, don't: add a .gitignore with * to it instead.", tilde(from), tilde(to)),
     }
 }

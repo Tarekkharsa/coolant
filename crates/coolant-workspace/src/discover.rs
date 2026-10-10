@@ -51,8 +51,9 @@ const SKIP: &[&str] = &["node_modules", "target", "Library", "Applications", "Mo
 
 fn find_repos(dir: &Path, depth: usize, out: &mut BTreeSet<PathBuf>) {
     // Only a .git *directory* marks a main checkout; linked worktrees have a
-    // .git file and are found through their repository.
-    if dir.join(".git").is_dir() {
+    // .git file and are found through their repository. A stray repository
+    // at ~ isn't a project (doctor flags it); look inside it as usual.
+    if dir.join(".git").is_dir() && dir != crate::config::home() {
         out.insert(dir.to_path_buf());
         return;
     }

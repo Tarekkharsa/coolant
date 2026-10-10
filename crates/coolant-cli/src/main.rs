@@ -249,14 +249,7 @@ fn sensors(count: u32) -> Result<()> {
         };
         println!(
             "cpu {:.1}°C (max {:.1})  gpu {:.1}°C  cpu {:.2}W  gpu {:.2}W  soc {:.2}W  fans {}  pressure {}",
-            s.cpu_temp_c,
-            s.cpu_temp_max_c,
-            s.gpu_temp_c,
-            s.cpu_power_w,
-            s.gpu_power_w,
-            s.soc_power_w,
-            fans,
-            s.pressure
+            s.cpu_temp_c, s.cpu_temp_max_c, s.gpu_temp_c, s.cpu_power_w, s.gpu_power_w, s.soc_power_w, fans, s.pressure
         );
     }
     Ok(())

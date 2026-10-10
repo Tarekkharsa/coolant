@@ -53,6 +53,8 @@ pub enum Action {
     /// Stop these processes (pid, command line), after checking each is
     /// still the same program: extra copies of a dev server.
     StopProcesses { procs: Vec<(i32, String)> },
+    /// Rename `from` to `to` (a stray `~/.git`); Undo renames it back.
+    MoveAside { from: PathBuf, to: PathBuf },
 }
 
 fn check(status: Status, title: impl Into<String>, detail: impl Into<String>, fix: impl Into<String>) -> Check {
@@ -94,11 +96,51 @@ pub fn setup(cfg: &Config, worktrees: &[Worktree]) -> Vec<Check> {
     stale(cfg, &linked, &mut out);
     prewarm(&linked, worktrees, &mut out);
     crash_loops(&mut out);
+    big_repos(&mut out);
     endpoint_security(&mut out);
     let procs = coolant_platform::current().processes().unwrap_or_default();
     container_vms(&procs, &mut out);
     duplicate_servers(cfg, &procs, &mut out);
     out
+}
+
+/// A git repository at ~ (or ~/Documents, ~/Desktop) puts every folder
+/// under it in one huge working tree: any tool that checks git status in a
+/// folder without a repository of its own scans all of it. On the M1 that
+/// was 20 s and 8 CPU-s per check, about twice a minute.
+fn big_repos(out: &mut Vec<Check>) {
+    for dir in [home(), home().join("Documents"), home().join("Desktop")] {
+        let git = dir.join(".git");
+        if !git.is_dir() || ignores_everything(&dir) {
+            continue;
+        }
+        let mut to = dir.join(".git-moved-by-coolant");
+        let mut n = 2;
+        while to.exists() {
+            to = dir.join(format!(".git-moved-by-coolant-{n}"));
+            n += 1;
+        }
+        out.push(
+            check(
+                Status::Warn,
+                format!("{} is a git repository", tilde(&dir)),
+                format!(
+                    "Every folder under {} is part of one huge working tree, so editors, agent hosts and git tools that check a folder without its own repository scan all of it (on one Mac: 20 s and 8 CPU-s per check, twice a minute).",
+                    tilde(&dir)
+                ),
+                format!("If you don't use it, move it aside: mv {} {}", tilde(&git), tilde(&to)),
+            )
+            .with(Action::MoveAside { from: git, to }),
+        );
+    }
+}
+
+/// Whether a repository at `dir` ignores everything (`*` or `/*`), the usual
+/// dotfiles setup, in which case git doesn't walk the tree.
+fn ignores_everything(dir: &Path) -> bool {
+    [dir.join(".gitignore"), dir.join(".git/info/exclude")]
+        .iter()
+        .any(|f| std::fs::read_to_string(f).is_ok_and(|t| t.lines().any(|l| matches!(l.trim(), "*" | "/*"))))
 }
 
 /// Median `/usr/bin/true` start-to-exit time above which program starts
