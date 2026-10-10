@@ -9,6 +9,7 @@ use coolant_core::classify::Category;
 use coolant_core::profile::Run;
 use coolant_workspace::doctor::Status as CheckStatus;
 use gpui::{Context, FontWeight, Rgba, div, prelude::*};
+use std::time::{Duration, Instant};
 
 /// Seconds of samples the status is judged on.
 const WINDOW_S: f64 = 30.0;
@@ -45,6 +46,31 @@ impl Level {
             Level::Warm => "thermometer.medium",
             Level::Hot => "thermometer.high",
         }
+    }
+}
+
+/// The level the panel shows: a new level replaces it only once it has
+/// held for a while, so a short spike doesn't flip the status back and forth.
+#[derive(Debug, Default)]
+pub struct Hold {
+    shown: Option<Level>,
+    pending: Option<(Level, Instant)>,
+}
+
+impl Hold {
+    pub fn update(&mut self, level: Level, now: Instant, hold: Duration) -> Level {
+        match (self.shown, self.pending) {
+            (None, _) => self.shown = Some(level),
+            (Some(shown), _) if shown == level => self.pending = None,
+            (Some(_), Some((l, since))) if l == level => {
+                if now.duration_since(since) >= hold {
+                    self.shown = Some(level);
+                    self.pending = None;
+                }
+            }
+            (Some(_), _) => self.pending = Some((level, now)),
+        }
+        self.shown.unwrap_or(level)
     }
 }
 
@@ -256,4 +282,57 @@ fn section(title: &'static str) -> gpui::Div {
 
 fn tint(c: Rgba) -> Rgba {
     Rgba { a: 0.16, ..c }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coolant_core::profile::Sample;
+    use coolant_platform::{Sensors, ThermalPressure};
+
+    fn run(busy: f64, indexer: f64, temp: f64, pressure: ThermalPressure) -> Run {
+        let mut run = Run::default();
+        run.machine.cores = 10;
+        for t in 0..4 {
+            let mut s = Sample {
+                t: t as f64 * 10.0,
+                busy_cores: busy,
+                sensors: Sensors { cpu_temp_c: temp, pressure, fan_rpm: vec![1000.0], ..Default::default() },
+                ..Default::default()
+            };
+            s.categories.insert(Category::Indexer, indexer);
+            run.samples.push(s);
+        }
+        run
+    }
+
+    #[test]
+    fn levels() {
+        let idle = read(&run(0.8, 0.0, 45.0, ThermalPressure::Nominal)).unwrap();
+        assert_eq!(idle.level, Level::Cool);
+        assert_eq!(idle.cause, None);
+        assert_eq!(idle.line, "45°C · fan quiet · 0.8 busy cores");
+
+        let spotlight = read(&run(2.0, 1.9, 55.0, ThermalPressure::Nominal)).unwrap();
+        assert_eq!(spotlight.level, Level::Warm);
+        assert!(spotlight.cause.unwrap().starts_with("Spotlight is re-indexing"));
+
+        assert_eq!(read(&run(1.0, 0.0, 60.0, ThermalPressure::Heavy)).unwrap().level, Level::Hot);
+        assert_eq!(read(&run(8.0, 0.0, 60.0, ThermalPressure::Nominal)).unwrap().level, Level::Hot);
+        assert!(read(&Run::default()).is_none());
+    }
+
+    #[test]
+    fn a_new_level_must_hold() {
+        let (t0, hold) = (Instant::now(), Duration::from_secs(15));
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let mut h = Hold::default();
+        assert_eq!(h.update(Level::Cool, at(0), hold), Level::Cool);
+        assert_eq!(h.update(Level::Warm, at(10), hold), Level::Cool);
+        // A blip back to cool restarts the wait.
+        assert_eq!(h.update(Level::Cool, at(20), hold), Level::Cool);
+        assert_eq!(h.update(Level::Warm, at(30), hold), Level::Cool);
+        assert_eq!(h.update(Level::Warm, at(40), hold), Level::Cool);
+        assert_eq!(h.update(Level::Warm, at(45), hold), Level::Warm);
+    }
 }

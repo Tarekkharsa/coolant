@@ -75,7 +75,7 @@ pub struct Dashboard {
     reading: Option<summary::Reading>,
     /// The level shown, which changes only after [`LEVEL_HOLD`].
     level: Level,
-    pending: Option<(Level, Instant)>,
+    hold: summary::Hold,
     last_paint: Instant,
 }
 
@@ -91,7 +91,7 @@ impl Dashboard {
             details: false,
             reading: None,
             level: Level::Cool,
-            pending: None,
+            hold: summary::Hold::default(),
             last_paint: Instant::now(),
         };
         d.refresh_checks(cx);
@@ -107,18 +107,7 @@ impl Dashboard {
             self.stacks = s;
         }
         if let Some(r) = &self.reading {
-            match self.pending {
-                _ if r.level == self.level => self.pending = None,
-                Some((l, since)) if l == r.level && since.elapsed() >= LEVEL_HOLD => {
-                    self.level = l;
-                    self.pending = None;
-                }
-                Some((l, _)) if l == r.level => {}
-                _ => self.pending = Some((r.level, Instant::now())),
-            }
-            if first {
-                self.level = r.level;
-            }
+            self.level = self.hold.update(r.level, Instant::now(), LEVEL_HOLD);
         }
         let paint = first || self.details || self.last_paint.elapsed() >= PAINT_EVERY;
         if paint {
