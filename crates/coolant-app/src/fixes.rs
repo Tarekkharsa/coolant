@@ -301,7 +301,8 @@ fn compact_text(c: &Check) -> (String, String) {
         if ps.len() > 1 { format!("{first} and {} more", ps.len() - 1) } else { first }
     };
     match &c.action {
-        Some(Action::Tune { paths: ps }) => ("Stop Spotlight indexing agent worktrees".into(), paths(ps)),
+        Some(Action::SpotlightPrivacy { paths: ps }) => ("Stop Spotlight indexing agent worktrees".into(), paths(ps)),
+        Some(Action::RestoreMoved { paths: ps }) => ("Move back folders Coolant moved".into(), paths(ps)),
         Some(Action::ExcludeFromBackups { paths: ps }) => ("Stop backing up agent worktrees".into(), paths(ps)),
         Some(Action::Prewarm { worktrees, .. }) => {
             (format!("Prewarm {} new worktree(s)", worktrees.len()), "so their first build isn't from scratch".into())
@@ -322,7 +323,8 @@ fn compact_text(c: &Check) -> (String, String) {
 
 fn short_label(a: &Action) -> &'static str {
     match a {
-        Action::Tune { .. } | Action::ExcludeFromBackups { .. } => "Fix",
+        Action::SpotlightPrivacy { .. } | Action::ExcludeFromBackups { .. } => "Fix",
+        Action::RestoreMoved { .. } => "Move back",
         Action::Prewarm { .. } => "Prewarm",
         Action::Sweep => "Clean up",
         Action::StopService { .. } | Action::StopProcesses { .. } => "Stop",
@@ -352,7 +354,8 @@ pub fn button(id: (&'static str, usize), label: impl Into<gpui::SharedString>, b
 
 fn button_label(a: &Action) -> &'static str {
     match a {
-        Action::Tune { .. } => "Exclude from Spotlight",
+        Action::SpotlightPrivacy { .. } => "Exclude from Spotlight",
+        Action::RestoreMoved { .. } => "Move back",
         Action::ExcludeFromBackups { .. } => "Exclude from Time Machine",
         Action::Prewarm { .. } => "Prewarm",
         Action::Sweep => "Clean up",
@@ -364,7 +367,8 @@ fn button_label(a: &Action) -> &'static str {
 
 fn confirm_label(a: &Action) -> String {
     match a {
-        Action::Tune { paths } => format!("Move {} folder(s)", paths.len()),
+        Action::SpotlightPrivacy { .. } => "Open Spotlight settings".into(),
+        Action::RestoreMoved { paths } => format!("Move {} back", paths.len()),
         Action::ExcludeFromBackups { .. } => "Exclude".into(),
         Action::Prewarm { worktrees, .. } => format!("Prewarm {} worktree(s)", worktrees.len()),
         Action::Sweep => "Delete".into(),
@@ -377,7 +381,8 @@ fn confirm_label(a: &Action) -> String {
 /// What confirming will do, in plain words.
 fn explain(a: &Action) -> String {
     match a {
-        Action::Tune { .. } => "Moves the folder into ~/.coolant/spaces.noindex and leaves a link in its place, so agents and editors keep using the same path. Spotlight and Time Machine skip it. Undo puts it back.".into(),
+        Action::SpotlightPrivacy { .. } => "Opens System Settings → Spotlight and shows the folder in Finder. Click Search Privacy… and drag the folder in: Spotlight stops indexing it, and nothing is moved. Remove it from that list to undo.".into(),
+        Action::RestoreMoved { .. } => "Removes the link and moves each folder back to its old place, exactly as it was. Nothing else changes.".into(),
         Action::ExcludeFromBackups { .. } => "Time Machine stops backing up this folder. Undo turns backups back on.".into(),
         Action::Prewarm { .. } => "Clones target/, node_modules and similar from the main checkout with copy-on-write (no extra disk), and adds a git hook so new worktrees get the same.".into(),
         Action::Sweep => "Deletes build folders (target/, node_modules, …) in worktrees idle for 7+ days or already merged. Your code and branches stay; a rebuild recreates them.".into(),

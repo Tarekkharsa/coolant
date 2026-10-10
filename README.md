@@ -77,7 +77,6 @@ coolant bench --preset quick         # reproducible agent-like workloads (~5 min
 ## Fix
 
 ```sh
-coolant tune ~/code/app/.claude/worktrees   # keep worktrees out of Spotlight and Time Machine
 coolant prewarm path/to/worktree            # clone target/, node_modules … from the main checkout
 coolant prewarm --install-hook ~/code/app   # …automatically for every new worktree
 coolant sweep                               # list build artifacts in idle/merged worktrees
@@ -85,11 +84,16 @@ coolant sweep --yes                         # …and delete them
 coolant protect ~/demo                      # never touch this path
 ```
 
-- **tune** moves the folder into `~/.coolant/spaces.noindex/` and leaves a
-  symlink, so agents keep using the same path while Spotlight (which skips
-  `.noindex` folders and doesn't follow symlinks) leaves it alone. It also adds a
-  Time Machine exclusion. `--undo` moves it back. (A `.metadata_never_index`
-  marker file does not work for folders on current macOS; we tested.)
+- **Spotlight:** add your agent worktree folders (like
+  `~/code/app/.claude/worktrees`) to *System Settings → Spotlight → Search
+  Privacy…*. That excludes them where they are; `coolant doctor` and the app
+  point you there. (A `.metadata_never_index` marker file does not work for
+  folders on current macOS; we tested.)
+- **tune** moves a folder into `~/.coolant/spaces.noindex/` behind a symlink.
+  It refuses git worktrees: Claude Code follows the link, finds the worktree
+  outside its repository and refuses to create new ones. Versions before
+  0.2.0-beta.7 did this to worktree folders; `coolant doctor` finds them and
+  `coolant tune --undo <folder>` (or *Move back* in the app) restores them.
 - **prewarm** uses copy-on-write (APFS clonefile, Linux reflinks): about a
   second, no extra disk until files change, and the first build becomes
   incremental.

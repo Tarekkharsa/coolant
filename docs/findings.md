@@ -45,11 +45,16 @@ clonefile, and 15.3 vs 2.8 for git with 2 agents (a second run: 15.2 vs 1.4,
 13.6 vs 1.2, and 22.2 vs 3.0). On the M2 Pro: 14.1 vs 1.6,
 12.1 vs 0.8, and 19.2 vs 3.1.
 
-**Fix:** keep agent worktrees out of Spotlight with `coolant tune <folder>`.
-It moves the folder into `~/.coolant/spaces.noindex/` and symlinks it back.
-Spotlight doesn't follow symlinks, so files written through the old path aren't
-indexed; we verified this with `mdfind`. A `.metadata_never_index` file inside
-a folder does **not** stop indexing on macOS 27; we tested that too.
+**Fix:** add the agent worktree folder (e.g. `<repo>/.claude/worktrees`) to
+*System Settings → Spotlight → Search Privacy…*, which excludes it in place.
+A `.metadata_never_index` file inside a folder does **not** stop indexing on
+macOS 27; we tested that.
+
+We first moved worktree folders into `~/.coolant/spaces.noindex/` behind a
+symlink. Spotlight skipped them (verified with `mdfind`), but **it broke
+Claude Code**: it resolves the link, finds the worktree outside its repository
+and refuses to create agent worktrees. `coolant tune` now refuses worktrees,
+and `coolant doctor` offers to move back any it moved before.
 
 ## 2. Fresh binaries pay a security tax on first run
 

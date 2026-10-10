@@ -7,6 +7,11 @@
 //! keep reading and writing the old path, while the files physically live
 //! where Spotlight won't index them. (A `.metadata_never_index` marker file
 //! does *not* work for folders on current macOS; we tested.)
+//!
+//! Never for git worktrees or folders holding them: Claude Code resolves the
+//! link, finds the worktree outside its repository and refuses to create
+//! agent worktrees there. Those go in Spotlight's Search Privacy list
+//! instead, which excludes them in place.
 
 use crate::config::{Config, canonical, home, tilde};
 use crate::inuse::InUse;
@@ -48,6 +53,12 @@ pub fn tune(cfg: &Config, dir: &Path, dry_run: bool, force: bool) -> Result<Outc
     }
     if std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
         bail!("{} is already a symlink; not touching it", tilde(&dir));
+    }
+    if let Some(why) = holds_worktrees(&dir) {
+        bail!(
+            "not moving {}: {why}. Agents such as Claude Code follow the link and break. Exclude it in System Settings → Spotlight → Search Privacy… instead",
+            tilde(&dir)
+        );
     }
     if !force && let Some(why) = too_broad(cfg, &dir) {
         bail!("not moving {}: {why} (pass --force if you really mean it)", tilde(&dir));
@@ -105,6 +116,42 @@ pub fn dedicated_container(dir: &Path) -> bool {
     })
 }
 
+/// Whether `dir` is, or holds, a git worktree.
+fn holds_worktrees(dir: &Path) -> Option<&'static str> {
+    if dir.join(".git").exists() {
+        return Some("it is a git worktree");
+    }
+    let holds = std::fs::read_dir(dir).map(|es| es.flatten().any(|e| e.path().join(".git").exists())).unwrap_or(false);
+    let agent_dir = dir.ends_with(".claude/worktrees") || dir.ends_with(".codex/worktrees");
+    (holds || agent_dir).then_some("it holds git worktrees")
+}
+
+/// Whether Spotlight has indexed anything in `dir`. False for a folder in
+/// the Search Privacy list, and for one Spotlight hasn't got to yet.
+pub fn spotlight_indexes(dir: &Path) -> bool {
+    std::process::Command::new("mdfind")
+        .arg("-onlyin")
+        .arg(dir)
+        .args(["-count", "kMDItemDisplayName == '*'"])
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u64>().is_ok_and(|n| n > 0))
+}
+
+/// Worktree folders moved into [`spaces_dir`] whose link is still in
+/// place, as the paths of their links. (Other folders moved with `coolant
+/// tune` are fine where they are.)
+pub fn moved_worktrees() -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(spaces_dir()) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            let link = home().join(name.replace('%', "/"));
+            (std::fs::read_link(&link).ok()? == e.path() && holds_worktrees(&e.path()).is_some()).then_some(link)
+        })
+        .collect()
+}
+
 /// Folders that are too big a change to move without --force: the home
 /// folder, configured roots, and anything holding a main checkout.
 fn too_broad(cfg: &Config, dir: &Path) -> Option<&'static str> {
@@ -128,6 +175,9 @@ pub fn undo(dir: &Path) -> Result<Outcome> {
     }
     std::fs::remove_file(&dir)?;
     std::fs::rename(&target, &dir).with_context(|| format!("moving {} back", tilde(&target)))?;
+    // tune excluded it from Time Machine; it wasn't before.
+    let _ = set_backup_excluded(&dir, false);
+    let _ = std::fs::remove_dir(spaces_dir());
     Ok(Outcome::Undone { from: target })
 }
 

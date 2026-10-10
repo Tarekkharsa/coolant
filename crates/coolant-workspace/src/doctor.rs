@@ -39,8 +39,14 @@ pub struct Check {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Action {
-    /// Move these folders out of Spotlight's reach with [`crate::tune`].
-    Tune { paths: Vec<PathBuf> },
+    /// Open Spotlight's Search Privacy settings and show these folders in
+    /// Finder, to be dragged in: excluded where they are. (Moving them
+    /// behind a symlink broke Claude Code, which follows it and then refuses
+    /// a worktree outside its repository.)
+    SpotlightPrivacy { paths: Vec<PathBuf> },
+    /// Move folders an earlier version moved into `~/.coolant/spaces.noindex`
+    /// back to these paths.
+    RestoreMoved { paths: Vec<PathBuf> },
     /// Exclude these folders from Time Machine.
     ExcludeFromBackups { paths: Vec<PathBuf> },
     /// Clone build artifacts into these worktrees, and install the
@@ -90,6 +96,7 @@ pub fn setup(cfg: &Config, worktrees: &[Worktree]) -> Vec<Check> {
         "",
         "",
     ));
+    moved_earlier(&mut out);
     spotlight(&linked, &mut out);
     time_machine(&linked, &mut out);
     icloud(cfg, &mut out);
@@ -267,12 +274,12 @@ fn spotlight(linked: &[&Worktree], out: &mut Vec<Check>) {
     }
     let mut indexed = 0;
     for (dir, n) in containers(linked) {
-        if excluded_from_spotlight(&dir) {
+        if excluded_from_spotlight(&dir) || !crate::tune::spotlight_indexes(&dir) {
             continue;
         }
         indexed += n;
-        // Tune a folder that only holds worktrees (so future ones land there
-        // too); otherwise the worktrees one by one.
+        // Exclude a folder that only holds worktrees (so future ones are
+        // covered too); otherwise the worktrees one by one.
         let targets: Vec<PathBuf> = if crate::tune::dedicated_container(&dir) {
             vec![dir.clone()]
         } else {
@@ -284,14 +291,34 @@ fn spotlight(linked: &[&Worktree], out: &mut Vec<Check>) {
                 Status::Warn,
                 format!("Spotlight indexes {n} worktree(s) in {}", tilde(&dir)),
                 "Every file agents write there (dependencies, build output) gets re-indexed: in our benchmark ~30× more background CPU than an excluded folder.",
-                format!("coolant tune {fix}"),
+                format!("System Settings → Spotlight → Search Privacy…, then add {fix}"),
             )
-            .with(Action::Tune { paths: targets }),
+            .with(Action::SpotlightPrivacy { paths: targets }),
         );
     }
     if indexed == 0 && !linked.is_empty() {
-        out.push(check(Status::Ok, "Agent worktrees are excluded from Spotlight", "", ""));
+        out.push(check(Status::Ok, "Spotlight isn't indexing agent worktrees", "", ""));
     }
+}
+
+/// Folders an earlier version of coolant moved into `~/.coolant/spaces.noindex`
+/// behind a symlink. Claude Code resolves the link and then refuses to
+/// create worktrees there, so put them back.
+fn moved_earlier(out: &mut Vec<Check>) {
+    let moved = crate::tune::moved_worktrees();
+    if moved.is_empty() {
+        return;
+    }
+    let list = moved.iter().map(|p| tilde(p)).collect::<Vec<_>>().join(", ");
+    out.push(
+        check(
+            Status::Warn,
+            format!("{} worktree folder(s) moved by an earlier Coolant: {list}", moved.len()),
+            "An earlier version moved them into ~/.coolant/spaces.noindex and left a link in their place. Claude Code follows the link, finds a path outside the repository and refuses to create agent worktrees there.",
+            format!("coolant tune --undo {}", moved.iter().map(|p| shell_quote(&tilde(p))).collect::<Vec<_>>().join(" ")),
+        )
+        .with(Action::RestoreMoved { paths: moved }),
+    );
 }
 
 fn time_machine(linked: &[&Worktree], out: &mut Vec<Check>) {

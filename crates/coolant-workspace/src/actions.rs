@@ -32,21 +32,29 @@ pub enum Undo {
 /// means nothing was changed.
 pub fn apply(cfg: &Config, action: &Action) -> Result<Done> {
     match action {
-        Action::Tune { paths } => {
-            let (mut moved, mut failed) = (Vec::new(), Vec::new());
+        Action::SpotlightPrivacy { paths } => {
+            run(Command::new("open").arg("x-apple.systempreferences:com.apple.Spotlight-Settings.extension"))?;
+            // Selected in a Finder window, ready to drag into the list.
+            run(Command::new("open").arg("-R").args(paths))?;
+            Ok(Done {
+                message: "In Spotlight settings, click Search Privacy…, then drag in the folder Finder shows (or click + and choose it).".into(),
+                undo: None,
+            })
+        }
+        Action::RestoreMoved { paths } => {
+            let (mut back, mut failed) = (0, Vec::new());
             for p in paths {
-                match tune::tune(cfg, p, false, false) {
-                    Ok(tune::Outcome::Tuned { .. }) => moved.push(p.clone()),
-                    Ok(_) => {}
+                match tune::undo(p) {
+                    Ok(_) => back += 1,
                     Err(e) => failed.push(format!("{e:#}")),
                 }
             }
-            if moved.is_empty() && !failed.is_empty() {
+            if back == 0 && !failed.is_empty() {
                 bail!("{}", failed.join("; "));
             }
-            let mut message = format!("Moved {} folder(s) out of Spotlight; agents use the same paths.", moved.len());
+            let mut message = format!("Moved {back} folder(s) back where they were.");
             append_failures(&mut message, &failed);
-            Ok(Done { message, undo: (!moved.is_empty()).then_some(Undo::Tune(moved)) })
+            Ok(Done { message, undo: None })
         }
         Action::ExcludeFromBackups { paths } => {
             for p in paths {
@@ -182,6 +190,14 @@ fn brew(args: &[&str]) -> Result<()> {
     bail!("Homebrew not found")
 }
 
+fn run(cmd: &mut Command) -> Result<()> {
+    let out = cmd.output().with_context(|| format!("running {:?}", cmd.get_program()))?;
+    if !out.status.success() {
+        bail!("{:?}: {}", cmd.get_program(), String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
+}
+
 fn append_failures(message: &mut String, failed: &[String]) {
     if !failed.is_empty() {
         message.push_str(&format!(" Skipped: {}", failed.join("; ")));
@@ -193,17 +209,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tune_then_undo_restores_the_folder() {
+    fn tune_refuses_worktrees_and_undo_restores_a_folder() {
         let base = std::env::temp_dir().join(format!("coolant-actions-{}", std::process::id()));
         let dir = base.join("worktrees");
         std::fs::create_dir_all(dir.join("wt")).unwrap();
+        std::fs::write(dir.join("wt/.git"), "gitdir: x").unwrap();
+        let cfg = Config::default();
+        assert!(tune::tune(&cfg, &dir, false, true).is_err());
+        assert!(tune::tune(&cfg, &dir.join("wt"), false, true).is_err());
+        assert!(!std::fs::symlink_metadata(&dir).unwrap().file_type().is_symlink());
+
+        std::fs::remove_file(dir.join("wt/.git")).unwrap();
         std::fs::write(dir.join("wt/file"), "x").unwrap();
-
-        let done = apply(&Config::default(), &Action::Tune { paths: vec![dir.clone()] }).unwrap();
+        tune::tune(&cfg, &dir, false, false).unwrap();
         assert!(std::fs::symlink_metadata(&dir).unwrap().file_type().is_symlink());
-        assert_eq!(std::fs::read_to_string(dir.join("wt/file")).unwrap(), "x");
-
-        undo(done.undo.as_ref().expect("tune can be undone")).unwrap();
+        undo(&Undo::Tune(vec![dir.clone()])).unwrap();
         assert!(!std::fs::symlink_metadata(&dir).unwrap().file_type().is_symlink());
         assert_eq!(std::fs::read_to_string(dir.join("wt/file")).unwrap(), "x");
         let _ = std::fs::remove_dir_all(&base);
