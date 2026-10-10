@@ -18,6 +18,21 @@ background processes during the workload plus a 4 s tail:
 | git: init, commit 1,500 files, 20× status, 2 worktrees | 4.0 | 1.2 |
 | write / stat / read / delete 3,000 small files | 3.9 | 0.4 |
 
+The gap holds at realistic sizes. In the Default preset (20,000-file trees, a
+10,000-file git repo, 1, 2 and 4 agents in parallel):
+
+| workload, 1 agent | indexed | `.noindex` |
+|---|---|---|
+| copy a 20,000-file deps tree (`cp -R`) | 50.1 CPU-s overhead | 6.0 |
+| clone it with APFS clonefile (`cp -c`) | 46.3 | 3.2 |
+| git: 10,000-file repo, 50× status, 3 worktrees | 20.4 | 8.7 |
+| 20,000 small files | 12.4 | 2.8 |
+
+With 4 agents doing the git workload at once, the indexed folder cost
+95 CPU-s of overhead against 29 in `.noindex`, on top of 85 CPU-s of actual
+work. The remaining overhead in `.noindex` is mostly `fseventsd`, which no
+folder setting avoids.
+
 The workloads themselves took only 1–14% longer in the indexed folder, because
 `mds_stores` and `mdworker_shared` do their work *after* the files are
 written. An agent never sees it; the CPU, power draw and fan do.
@@ -31,7 +46,7 @@ a folder does **not** stop indexing on macOS 27; we tested that too.
 ## 2. Fresh binaries pay a security tax on first run
 
 Running a newly built, ad-hoc-signed binary for the first time took
-**~450 ms**, against **~2 ms** for later runs (and 0.7 ms for `/usr/bin/true`),
+**320–450 ms** across runs, against **1–2 ms** for later runs (and 0.7 ms for `/usr/bin/true`),
 with the extra time spent in `syspolicyd`. Every `cargo build` / `cargo test`
 produces new binaries, so Rust agents iterating on tests pay this again and
 again.

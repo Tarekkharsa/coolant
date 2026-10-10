@@ -24,8 +24,9 @@ From [`docs/results`](docs/results/) and [`docs/findings.md`](docs/findings.md):
 |---|---|
 | Copy a 3,000-file dependency tree into a Spotlight-indexed folder | **~20 CPU-s** of Spotlight work afterwards |
 | Same in a `.noindex` folder | **~0.7 CPU-s** (about 30× less) |
+| Copy a 20,000-file dependency tree, indexed vs `.noindex` | **50 vs 6 CPU-s** of OS overhead |
 | Wall-clock difference between the two | 1–14%: the agent doesn't notice, the fan does |
-| First run of a never-seen binary (every `cargo build` makes new ones) | **~450 ms** of security checks vs 2 ms warm |
+| First run of a never-seen binary (every `cargo build` makes new ones) | **320–450 ms** of security checks vs 1–2 ms warm |
 | APFS clonefile vs plain copy for dependencies | ~1.8× faster, but clones get indexed too, so *where* matters more than *how* |
 | First `cargo build` of the GUI app in a fresh worktree | **256.7 CPU-s** cold vs **5.1 CPU-s** after `coolant prewarm` (50× less) |
 

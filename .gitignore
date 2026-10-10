@@ -3,3 +3,4 @@
 *.profile.json
 .DS_Store
 runs-*.log
+/dist/
