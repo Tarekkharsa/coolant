@@ -50,6 +50,12 @@ impl MenuBar {
             menu.addItem_(NSMenuItem::separatorItem(nil));
             let target: id = msg_send![target_class(), new];
             add(menu, "Open coolant", Some(target), Some(sel!(open:)), "o");
+            // Login items need an app bundle; `cargo run` has none.
+            let bundle_id: id = msg_send![main_bundle(), bundleIdentifier];
+            if bundle_id != nil && login_service() != nil {
+                let item = add(menu, "Open at Login", Some(target), Some(sel!(toggleLogin:)), "");
+                let _: () = msg_send![item, setState: if login_status() == LOGIN_ENABLED { 1i64 } else { 0i64 }];
+            }
             let app: id = msg_send![class!(NSApplication), sharedApplication];
             add(menu, "Quit coolant", Some(app), Some(sel!(terminate:)), "q");
             item.setMenu_(menu);
@@ -123,7 +129,37 @@ unsafe fn add(menu: id, title: &str, target: Option<id>, action: Option<Sel>, ke
     }
 }
 
-/// An NSObject subclass whose `open:` asks the app to show the dashboard.
+#[link(name = "ServiceManagement", kind = "framework")]
+unsafe extern "C" {}
+
+/// SMAppService.Status values.
+const LOGIN_ENABLED: i64 = 1;
+const LOGIN_REQUIRES_APPROVAL: i64 = 2;
+
+unsafe fn main_bundle() -> id {
+    unsafe { msg_send![class!(NSBundle), mainBundle] }
+}
+
+/// `SMAppService.mainApp` (macOS 13+), or nil on older systems.
+fn login_service() -> id {
+    match Class::get("SMAppService") {
+        // SAFETY: a class method returning an autoreleased singleton.
+        Some(cls) => unsafe { msg_send![cls, mainAppService] },
+        None => nil,
+    }
+}
+
+fn login_status() -> i64 {
+    let svc = login_service();
+    if svc == nil {
+        return 0;
+    }
+    // SAFETY: `status` is a plain NSInteger property.
+    unsafe { msg_send![svc, status] }
+}
+
+/// An NSObject subclass whose `open:` asks the app to show the dashboard
+/// and whose `toggleLogin:` turns Open at Login on or off.
 fn target_class() -> &'static Class {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
@@ -131,8 +167,31 @@ fn target_class() -> &'static Class {
         extern "C" fn open(_this: &Object, _sel: Sel, _sender: id) {
             OPEN_REQUESTED.store(true, Ordering::SeqCst);
         }
-        // SAFETY: the signature matches an Objective-C action method.
-        unsafe { decl.add_method(sel!(open:), open as extern "C" fn(&Object, Sel, id)) };
+        extern "C" fn toggle_login(_this: &Object, _sel: Sel, sender: id) {
+            let svc = login_service();
+            if svc == nil {
+                return;
+            }
+            // SAFETY: SMAppService calls with a nil error pointer; `sender`
+            // is the menu item.
+            unsafe {
+                if login_status() == LOGIN_ENABLED {
+                    let _: bool = msg_send![svc, unregisterAndReturnError: nil];
+                } else {
+                    let _: bool = msg_send![svc, registerAndReturnError: nil];
+                }
+                // The user may have to allow it in System Settings first.
+                if login_status() == LOGIN_REQUIRES_APPROVAL {
+                    let _: () = msg_send![class!(SMAppService), openSystemSettingsLoginItems];
+                }
+                let _: () = msg_send![sender, setState: if login_status() == LOGIN_ENABLED { 1i64 } else { 0i64 }];
+            }
+        }
+        // SAFETY: the signatures match Objective-C action methods.
+        unsafe {
+            decl.add_method(sel!(open:), open as extern "C" fn(&Object, Sel, id));
+            decl.add_method(sel!(toggleLogin:), toggle_login as extern "C" fn(&Object, Sel, id));
+        }
         decl.register();
     });
     Class::get("CoolantMenuTarget").expect("registered above")
