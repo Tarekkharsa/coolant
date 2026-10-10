@@ -4,7 +4,7 @@ Measured on a Mac mini M4 (10 cores, 16 GB, macOS 27.0.1) in October 2026,
 with coolant's own profiler and benchmarks. Raw results are in
 [`results/`](results/). These are single-machine numbers. Treat the ratios as
 the finding and the absolute values as illustrative. A Quick-preset run on a
-MacBook Pro M1 (8 cores, 8 GB, fanless, macOS 26.5.2) is noted below where it
+MacBook Pro 13" M1 (8 cores, 8 GB, macOS 26.5.2) is noted below where it
 differs.
 
 ## 1. Spotlight is the biggest hidden cost, and it's invisible to the agent
@@ -59,7 +59,9 @@ again.
 On the M1 the tax was heavier: about 1.9 CPU-s in security daemons per 10 new
 binaries (M4: 0.4). With 2 agents running new binaries at once, first runs took
 about 830 ms and throughput barely improved over 1 agent (57% parallel
-efficiency, against 100% on the M4).
+efficiency, against 100% on the M4). The two machines also run different macOS
+versions (26.5 vs 27), and the security scanners change between releases, so
+part of the difference may be the OS rather than the chip.
 
 ## 3. Cold worktrees rebuild everything
 

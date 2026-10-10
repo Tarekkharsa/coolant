@@ -118,7 +118,7 @@ copy a 3000-file deps tree into a new worktree dir with cp -c -R (APFS clonefile
 
 ## Notes on this run
 
-MacBook Pro 13" M1 (8 cores, 8 GB, fanless), macOS 26.5.2, app v0.2.0-beta.1
+MacBook Pro 13" M1 (8 cores, 8 GB, one fan, which stayed off: 0 rpm throughout), macOS 26.5.2, app v0.2.0-beta.1
 installed with `scripts/install.sh`, run with `coolant bench --preset quick`.
 
 - **The Spotlight gap reproduces.** After copying a 3,000-file tree the indexed
@@ -128,7 +128,8 @@ installed with `scripts/install.sh`, run with `coolant bench --preset quick`.
 - **Security checks cost more CPU on M1.** Each set of 10 never-seen binaries
   cost about 1.9 CPU-s in security daemons (M4: 0.35–0.40). With 2 agents the
   first exec took about 830 ms (M4: about 470 ms), and new-binary throughput
-  barely scaled (55 → 67 ops/s, 57% parallel efficiency; M4: 100%).
+  barely scaled (55 → 67 ops/s, 57% parallel efficiency; M4: 100%). The M4
+  ran macOS 27, so the OS version may account for part of this.
 - **The machine was noisy.** `coreaudiod` used 35 CPU-s and kept using about a
   quarter of a core at idle. `ReportCrash` used 20 CPU-s writing reports for
   crash-looping Homebrew services (`php-fpm`, `mysqld`, `watchman`). "other (bg)"
