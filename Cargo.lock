@@ -1083,7 +1083,7 @@ checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
 
 [[package]]
 name = "coolant-app"
-version = "0.2.0-beta.3"
+version = "0.2.0-beta.4"
 dependencies = [
  "cocoa 0.26.0",
  "coolant-core",
@@ -1096,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "coolant-bench"
-version = "0.2.0-beta.3"
+version = "0.2.0-beta.4"
 dependencies = [
  "anyhow",
  "coolant-core",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "coolant-cli"
-version = "0.2.0-beta.3"
+version = "0.2.0-beta.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -1122,7 +1122,7 @@ dependencies = [
 
 [[package]]
 name = "coolant-core"
-version = "0.2.0-beta.3"
+version = "0.2.0-beta.4"
 dependencies = [
  "coolant-platform",
  "regex",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "coolant-platform"
-version = "0.2.0-beta.3"
+version = "0.2.0-beta.4"
 dependencies = [
  "libc",
  "serde",
@@ -1140,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "coolant-workspace"
-version = "0.2.0-beta.3"
+version = "0.2.0-beta.4"
 dependencies = [
  "anyhow",
  "coolant-core",
