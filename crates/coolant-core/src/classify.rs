@@ -39,13 +39,17 @@ pub enum Category {
     Browser,
     /// The desktop itself: window server, Dock, Finder, wallpaper.
     Desktop,
+    /// The audio server; busy while an app holds the microphone or plays.
+    Audio,
+    /// Writing crash reports (ReportCrash, spindump): a program crashing.
+    CrashReporting,
     Kernel,
     Other,
 }
 
 impl Category {
     /// Every category in display order.
-    pub const ALL: [Category; 17] = [
+    pub const ALL: [Category; 19] = [
         Self::Agent,
         Self::AgentHost,
         Self::LanguageServer,
@@ -61,6 +65,8 @@ impl Category {
         Self::ContainerVm,
         Self::Browser,
         Self::Desktop,
+        Self::Audio,
+        Self::CrashReporting,
         Self::Kernel,
         Self::Other,
     ];
@@ -88,6 +94,8 @@ impl Category {
             Self::ContainerVm => "container-vm",
             Self::Browser => "browser",
             Self::Desktop => "desktop",
+            Self::Audio => "audio",
+            Self::CrashReporting => "crash-reporting",
             Self::Kernel => "kernel",
             Self::Other => "other",
         }
@@ -382,6 +390,31 @@ const NAME_RULES: &[(Category, &[&str])] = &[
             "plasmashell",
         ],
     ),
+    (
+        Audio,
+        &[
+            "coreaudiod",
+            "audiomxd",
+            "AudioComponentRegistrar",
+            "com.apple.audio.DriverHelper",
+            "audiodg.exe",
+            "pipewire",
+            "pulseaudio",
+            "wireplumber",
+        ],
+    ),
+    (
+        CrashReporting,
+        &[
+            "ReportCrash",
+            "spindump",
+            "osanalyticshelper",
+            "SubmitDiagInfo",
+            "WerFault.exe",
+            "systemd-coredump",
+            "apport",
+        ],
+    ),
     (Kernel, &["kernel_task", "System", "launchd"]),
 ];
 
@@ -516,6 +549,8 @@ mod tests {
             ("node", "node --env-file=.env src/main.ts", Runtime),
             ("mds_stores", "/System/Library/Metadata.framework/Support/mds_stores", Indexer),
             ("syspolicyd", "/usr/libexec/syspolicyd", Security),
+            ("coreaudiod", "/usr/sbin/coreaudiod", Audio),
+            ("ReportCrash", "/System/Library/CoreServices/ReportCrash agent", CrashReporting),
             ("Docker Desktop Helper (Renderer)", "", ContainerVm),
             ("Google Chrome Helper (Renderer)", "", Browser),
             ("com.apple.DriverKit-AppleBCMWLAN", "", Kernel),

@@ -132,6 +132,8 @@ fn cause_text(c: Category, cores: f64) -> String {
         Category::FsDaemon => format!("File-change tracking is busy with files your agents write, using {about}."),
         Category::BackupSync => format!("Backup or sync is copying files your agents changed, using {about}."),
         Category::ContainerVm => format!("Docker or another VM is using {about}."),
+        Category::Audio => format!("The audio service is using {about}; an app may be holding the microphone open."),
+        Category::CrashReporting => format!("Crash reporting is using {about}: a program keeps crashing."),
         Category::Agent | Category::Build | Category::PackageManager | Category::Vcs | Category::Search => {
             format!("Your agents' own work (builds, installs, tools) is using {about}. That's expected.")
         }
@@ -157,6 +159,8 @@ pub fn friendly(c: Category) -> &'static str {
         Category::ContainerVm => "Docker and VMs",
         Category::Browser => "The browser",
         Category::Desktop => "The desktop",
+        Category::Audio => "Audio",
+        Category::CrashReporting => "Crash reporting",
         Category::Kernel => "The system",
         Category::Other => "Other apps",
     }
