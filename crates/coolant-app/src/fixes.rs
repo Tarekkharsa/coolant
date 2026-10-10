@@ -289,6 +289,7 @@ fn button_label(a: &Action) -> &'static str {
         Action::Prewarm { .. } => "Prewarm",
         Action::Sweep => "Clean up",
         Action::StopService { .. } => "Stop service",
+        Action::StopProcesses { .. } => "Stop extra copies",
     }
 }
 
@@ -299,6 +300,7 @@ fn confirm_label(a: &Action) -> String {
         Action::Prewarm { worktrees, .. } => format!("Prewarm {} worktree(s)", worktrees.len()),
         Action::Sweep => "Delete".into(),
         Action::StopService { formula } => format!("Stop {formula}"),
+        Action::StopProcesses { procs } => format!("Stop {}", procs.len()),
     }
 }
 
@@ -310,5 +312,6 @@ fn explain(a: &Action) -> String {
         Action::Prewarm { .. } => "Clones target/, node_modules and similar from the main checkout with copy-on-write (no extra disk), and adds a git hook so new worktrees get the same.".into(),
         Action::Sweep => "Deletes build folders (target/, node_modules, …) in worktrees idle for 7+ days or already merged. Your code and branches stay; a rebuild recreates them.".into(),
         Action::StopService { formula } => format!("Runs brew services stop {formula}: the service stops and won't start at login. It keeps crashing, so it isn't working anyway. Undo starts it again."),
+        Action::StopProcesses { .. } => "Asks the later copies to quit (SIGTERM); the first one keeps running. Each process is checked again first, and ones serving a port shared through Tailscale are never stopped.".into(),
     }
 }

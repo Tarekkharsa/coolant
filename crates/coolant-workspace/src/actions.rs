@@ -80,6 +80,28 @@ pub fn apply(cfg: &Config, action: &Action) -> Result<Done> {
             append_failures(&mut message, &failed);
             Ok(Done { message, undo: None })
         }
+        Action::StopProcesses { procs } => {
+            // Re-check every process: still the same program, and not one
+            // serving a port shared through Tailscale or in a protected path.
+            let inuse = crate::inuse::InUse::scan();
+            let exposed = crate::exposed::exposed_pids();
+            let mut stopped = 0;
+            for (pid, command) in procs {
+                let same = inuse.command(*pid) == Some(command.as_str());
+                let protected = inuse.cwd(*pid).is_some_and(|c| cfg.is_protected(c));
+                // SAFETY: kill(2) with a plain signal has no memory-safety concerns.
+                if same && !protected && !exposed.contains(pid) && unsafe { libc::kill(*pid, libc::SIGTERM) } == 0 {
+                    stopped += 1;
+                }
+            }
+            if stopped == 0 {
+                bail!("those processes have already exited or changed");
+            }
+            Ok(Done {
+                message: format!("Stopped {stopped} extra cop{}.", if stopped == 1 { "y" } else { "ies" }),
+                undo: None,
+            })
+        }
         Action::StopService { formula } => {
             brew(&["services", "stop", formula])?;
             Ok(Done {

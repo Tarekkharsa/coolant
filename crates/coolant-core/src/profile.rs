@@ -410,13 +410,18 @@ impl Session {
         all.truncate(40);
         run.processes = all;
 
-        // Orphans: our own dev processes reparented to launchd, which usually
-        // means the agent or terminal that started them has gone away.
+        // Orphans: our own dev processes (and agents) reparented to launchd,
+        // which usually means the agent, terminal or app that started them
+        // has gone away.
         for (k, l) in &self.prev {
             let p = &l.process;
             let dev = matches!(
                 l.category,
-                Category::Runtime | Category::Build | Category::LanguageServer | Category::PackageManager
+                Category::Runtime
+                    | Category::Build
+                    | Category::LanguageServer
+                    | Category::PackageManager
+                    | Category::Agent
             );
             let app = p.command.starts_with("/Applications/") || p.command.starts_with("/System/");
             if p.ppid == 1

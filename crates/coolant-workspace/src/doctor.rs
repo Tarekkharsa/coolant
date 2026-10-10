@@ -50,6 +50,9 @@ pub enum Action {
     Sweep,
     /// `brew services stop` a crash-looping Homebrew service.
     StopService { formula: String },
+    /// Stop these processes (pid, command line), after checking each is
+    /// still the same program: extra copies of a dev server.
+    StopProcesses { procs: Vec<(i32, String)> },
 }
 
 fn check(status: Status, title: impl Into<String>, detail: impl Into<String>, fix: impl Into<String>) -> Check {
@@ -91,7 +94,84 @@ pub fn setup(cfg: &Config, worktrees: &[Worktree]) -> Vec<Check> {
     stale(cfg, &linked, &mut out);
     prewarm(&linked, worktrees, &mut out);
     crash_loops(&mut out);
+    endpoint_security(&mut out);
+    let procs = coolant_platform::current().processes().unwrap_or_default();
+    container_vms(&procs, &mut out);
+    duplicate_servers(cfg, &procs, &mut out);
     out
+}
+
+/// Median `/usr/bin/true` start-to-exit time above which program starts
+/// count as slow (unmanaged Apple Silicon Macs measure about 0.7–1.5 ms; a
+/// MacBook Pro with CrowdStrike Falcon measured 3.7 ms).
+const SLOW_EXEC_MS: f64 = 2.5;
+
+fn endpoint_security(out: &mut Vec<Check>) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let Some(ms) = crate::host::exec_latency_ms() else { return };
+    if ms < SLOW_EXEC_MS {
+        return;
+    }
+    let products = crate::host::endpoint_security_products();
+    let who = if products.is_empty() {
+        "Something checks every program before it runs: security software, a VPN or a device-management agent."
+            .to_string()
+    } else {
+        format!("{} checks every program before it runs.", products.join(", "))
+    };
+    out.push(check(
+        Status::Info,
+        format!("Starting a program takes {ms:.1} ms on this Mac (typical: about 1 ms)"),
+        format!("Agents start thousands of short programs (git, rg, node, compilers), so every tool call costs more. {who}"),
+        "Nothing to change from here. If IT manages this Mac, ask whether developer tools and agent worktrees can be excluded from scanning; prewarming worktrees helps more than usual.",
+    ));
+}
+
+fn container_vms(procs: &[coolant_platform::Process], out: &mut Vec<Check>) {
+    let running = crate::host::container_runtimes(procs);
+    if running.len() < 2 {
+        return;
+    }
+    out.push(check(
+        Status::Warn,
+        format!("{} are all running", running.join(" and ")),
+        "Each keeps its own Linux VM running, using CPU and memory even with no containers.",
+        "Quit the ones you don't use (keep the one your projects need).",
+    ));
+}
+
+fn duplicate_servers(cfg: &Config, procs: &[coolant_platform::Process], out: &mut Vec<Check>) {
+    let inuse = crate::inuse::InUse::scan();
+    let exposed = crate::exposed::exposed_pids();
+    let mut dups = crate::host::duplicate_servers(procs, |pid| inuse.cwd(pid).map(Path::to_path_buf));
+    dups.retain(|d| !cfg.is_protected(&d.dir));
+    for d in &mut dups {
+        d.extra.retain(|(pid, _)| !exposed.contains(pid));
+    }
+    dups.retain(|d| !d.extra.is_empty());
+    dups.sort_by_key(|d| std::cmp::Reverse(d.extra.len()));
+    for d in dups.into_iter().take(3) {
+        let pids = d.extra.iter().map(|(p, _)| p.to_string()).collect::<Vec<_>>().join(" ");
+        out.push(
+            check(
+                Status::Warn,
+                format!(
+                    "{} copies of `{}` are running in {}",
+                    d.extra.len() + 1,
+                    crate::host::short_command(&d.command),
+                    tilde(&d.dir)
+                ),
+                format!(
+                    "Agents often start a dev server or watcher again without stopping the first, and every copy rebuilds on each change. The first one (pid {}) would keep running.",
+                    d.keep
+                ),
+                format!("kill {pids}"),
+            )
+            .with(Action::StopProcesses { procs: d.extra }),
+        );
+    }
 }
 
 /// Folders that hold linked worktrees, e.g. `<repo>/.claude/worktrees`.

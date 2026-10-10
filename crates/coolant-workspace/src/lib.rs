@@ -9,6 +9,8 @@
 //!   is incremental instead of a full cold compile.
 //! - [`sweep`] deletes build artifacts in worktrees nobody is using anymore.
 //!
+//! - [`host`] finds security software that slows every program start,
+//!   several container VMs at once, and duplicate dev servers.
 //! - [`crashes`] finds programs that keep crashing (and keep ReportCrash busy).
 //! - [`actions`] applies a doctor fix in one step, for the app's buttons.
 //!
@@ -23,6 +25,7 @@ pub mod discover;
 pub mod doctor;
 pub mod exposed;
 pub mod fsutil;
+pub mod host;
 pub mod inuse;
 pub mod prewarm;
 pub mod sweep;
