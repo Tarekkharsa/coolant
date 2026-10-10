@@ -3,8 +3,8 @@
 Measured on a Mac mini M4 (10 cores, 16 GB, macOS 27.0.1) in October 2026,
 with coolant's own profiler and benchmarks. Raw results are in
 [`results/`](results/). These are single-machine numbers. Treat the ratios as
-the finding and the absolute values as illustrative. A Quick-preset run on a
-MacBook Pro 13" M1 (8 cores, 8 GB, macOS 26.5.2) and one on a company-managed
+the finding and the absolute values as illustrative. Quick-preset runs on a
+MacBook Pro 13" M1 (8 cores, 8 GB, macOS 26.5.2) and on a company-managed
 MacBook Pro 14" M2 Pro (10 cores, 16 GB, macOS 27.0, CrowdStrike Falcon) are
 noted below where they differ.
 
@@ -41,7 +41,8 @@ The workloads themselves took only 1–14% longer in the indexed folder, because
 written. An agent never sees it; the CPU, power draw and fan do.
 
 The gap held on the M1: 16.3 vs 1.6 CPU-s for `cp -R`, 11.2 vs 1.1 for
-clonefile, and 15.3 vs 2.8 for git with 2 agents. On the M2 Pro: 14.1 vs 1.6,
+clonefile, and 15.3 vs 2.8 for git with 2 agents (a second run: 15.2 vs 1.4,
+13.6 vs 1.2, and 22.2 vs 3.0). On the M2 Pro: 14.1 vs 1.6,
 12.1 vs 0.8, and 19.2 vs 3.1.
 
 **Fix:** keep agent worktrees out of Spotlight with `coolant tune <folder>`.
@@ -63,7 +64,11 @@ binaries (M4: 0.4). With 2 agents running new binaries at once, first runs took
 about 830 ms and throughput barely improved over 1 agent (57% parallel
 efficiency, against 100% on the M4). The two machines also run different macOS
 versions (26.5 vs 27), and the security scanners change between releases, so
-part of the difference may be the OS rather than the chip.
+part of the difference may be the OS rather than the chip. A second run gave
+the same picture: 1.8–3.9 CPU-s per 10 new binaries, first runs of 407–517 ms
+with 1 agent and 808–834 ms with 2, and 62% parallel efficiency. The M2 Pro
+scaled at 98% once its other agents were quiet; the M1 was never quiet (see
+finding 7).
 
 On the M2 Pro, first runs took 870–920 ms and later runs 7 ms. See finding 6
 for why.
@@ -137,6 +142,27 @@ A second run on the same Mac, with no other agents busy, gave the same
 numbers (244–250 execs per second, 780–930 ms for a first exec), and new
 binaries then scaled to 2 agents at 98% efficiency. `coolant doctor` now
 measures program start time and names any active endpoint security extension.
+
+## 7. An idle Mac can be busier than the agents
+
+With no agent working and no benchmark running, the M1 kept **1.63 cores**
+busy on average over 2 minutes. Spotlight and security were 2% of it. Most of
+the rest came from three sources, none of them agent work:
+
+- **A git repository at `~`.** The home folder had a stray `.git` with one
+  commit, so every folder under it sat inside a 1-million-file working tree.
+  The agent host polls the git state of a thread's folder, which meant
+  `git ls-files --others` at the root of the home folder: 20 s and 8.2 CPU-s
+  per run, about twice a minute, 854 MB read from disk in 2 minutes. In this
+  repository the same command takes 0.01 s.
+- **`coreaudiod` at a quarter of a core**, with nothing playing. A dictation
+  app had held the microphone for 2 days, which accounts for almost all of
+  `coreaudiod`'s 696 CPU-minutes since boot. We didn't quit the app to confirm.
+- **Crash loops** (finding 4): `ReportCrash` used 0.14 cores at idle.
+
+Every number in the M1 runs carries this background load, which is why some of
+its cells flip direction between runs. Details are in
+[`results/2026-10-10-m1-macbook-pro-idle.md`](results/2026-10-10-m1-macbook-pro-idle.md).
 
 ## Method notes
 
