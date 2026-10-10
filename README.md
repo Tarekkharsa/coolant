@@ -32,14 +32,26 @@ From [`docs/results`](docs/results/) and [`docs/findings.md`](docs/findings.md):
 
 ## Install
 
-**Mac app (easiest):** download `Coolant-<version>.dmg` from the
-[latest release](https://github.com/Tarekkharsa/coolant/releases), open it and
-drag Coolant to Applications. It includes the `coolant` command-line tool too
-(`/Applications/Coolant.app/Contents/MacOS/coolant`).
+**Mac app (easiest):** paste this into Terminal:
 
-> The beta isn't notarized by Apple yet, so the first launch shows a warning.
-> Open **System Settings → Privacy & Security** and click **Open Anyway**
-> (once). Signed, notarized builds will open without it.
+```sh
+curl -fsSL https://raw.githubusercontent.com/Tarekkharsa/coolant/main/scripts/install.sh | sh
+```
+
+It downloads the newest release, checks its SHA-256, puts Coolant in
+Applications and opens it. Coolant isn't notarized by Apple (that needs a
+paid developer account). macOS only runs that check on apps a browser (or
+Mail, AirDrop, …) marked as downloaded, so installing this way skips the
+"Apple could not verify" warning. The
+[install script](scripts/install.sh) is short; read it first if you like.
+
+**Or download the .dmg** from the
+[releases](https://github.com/Tarekkharsa/coolant/releases) and drag Coolant to
+Applications. The first launch is blocked: click **Done**, then **System
+Settings → Privacy & Security → Open Anyway** (once).
+
+The app includes the `coolant` command-line tool
+(`/Applications/Coolant.app/Contents/MacOS/coolant`).
 
 **Command line only:**
 
@@ -142,8 +154,8 @@ See [docs/architecture.md](docs/architecture.md) for details.
 
 1. ✅ Profiler, sensors, benchmarks
 2. ✅ Workspace layer: tune, prewarm, sweep, doctor
-3. ✅ Mac app: menu bar, one-click fixes with Undo (beta); next: signed and
-   notarized builds, start at login, notifications when the machine runs hot
+3. ✅ Mac app: menu bar, one-click fixes with Undo (beta); next: start at
+   login, notifications when the machine runs hot
 4. Shared language servers and watchers across worktrees
 5. Filesystem layer: copy-on-write agent workspaces (FSKit on macOS, overlayfs
    on Linux, ProjFS / Dev Drive on Windows)

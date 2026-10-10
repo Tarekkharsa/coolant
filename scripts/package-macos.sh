@@ -70,5 +70,7 @@ if [ -n "${CODESIGN_IDENTITY:-}" ]; then
     xcrun stapler staple "$DMG"
   fi
 fi
-shasum -a 256 "$DMG"
+# scripts/install.sh checks downloads against this file (upload it with the .dmg).
+(cd dist && shasum -a 256 "$(basename "$DMG")" >"$(basename "$DMG").sha256")
+cat "$DMG.sha256"
 echo "built $DMG"
