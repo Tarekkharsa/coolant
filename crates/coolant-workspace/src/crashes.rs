@@ -15,6 +15,9 @@ use std::time::{Duration, SystemTime};
 /// Crashes within [`WINDOW`] before a program counts as crash-looping.
 pub const THRESHOLD: usize = 10;
 pub const WINDOW: Duration = Duration::from_secs(24 * 3600);
+/// A program that last crashed longer ago than this has stopped crashing,
+/// for now: it costs nothing until something starts it again.
+pub const ACTIVE: Duration = Duration::from_secs(3600);
 
 /// One crash report.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +29,8 @@ pub struct Report {
     pub system: bool,
     /// Signal or termination reason, e.g. "SIGABRT" or "Library missing".
     pub reason: String,
+    /// For "Library missing": the library's file name.
+    pub missing: Option<String>,
     /// When it crashed, from the report's header. (The file's modification
     /// time is no good: macOS rewrites old reports.)
     pub at: Option<SystemTime>,
@@ -41,6 +46,7 @@ pub struct Crashing {
     pub label: Option<String>,
     pub system: bool,
     pub reason: String,
+    pub missing: Option<String>,
     pub last: SystemTime,
 }
 
@@ -49,6 +55,31 @@ impl Crashing {
     pub fn brew_formula(&self) -> Option<&str> {
         self.label.as_deref()?.strip_prefix("homebrew.mxcl.")
     }
+
+    /// Still crashing: the last crash was within [`ACTIVE`].
+    pub fn active(&self) -> bool {
+        self.last.elapsed().unwrap_or_default() < ACTIVE
+    }
+}
+
+/// The Homebrew formula that installs the program `name`, if any (`mysqld`
+/// → `mysql`). Crash reports hide the program's path, so look for it.
+pub fn homebrew_formula_of(name: &str) -> Option<String> {
+    for prefix in ["/opt/homebrew/opt", "/usr/local/opt"] {
+        let Ok(entries) = std::fs::read_dir(prefix) else { continue };
+        let mut found: Vec<String> = entries
+            .flatten()
+            .filter(|e| ["bin", "sbin"].iter().any(|d| e.path().join(d).join(name).exists()))
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        // opt/ also has aliases (mysql@8.4 next to mysql); the shortest name
+        // is the formula itself.
+        found.sort_by_key(|f| f.len());
+        if let Some(f) = found.into_iter().next() {
+            return Some(f);
+        }
+    }
+    None
 }
 
 /// Programs that crashed at least [`THRESHOLD`] times in the last [`WINDOW`],
@@ -107,9 +138,14 @@ pub fn parse(text: &str) -> Option<Report> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let missing = body
+        .pointer("/termination/reasons/0")
+        .and_then(Value::as_str)
+        .and_then(|r| r.strip_prefix("Library not loaded: "))
+        .map(|lib| lib.rsplit('/').next().unwrap_or(lib).to_string());
     let at = header.get("timestamp").and_then(Value::as_str).and_then(parse_timestamp);
     let incident = header.get("incident_id").and_then(Value::as_str).unwrap_or("").to_string();
-    Some(Report { name: name.to_string(), label, system, reason, at, incident })
+    Some(Report { name: name.to_string(), label, system, reason, missing, at, incident })
 }
 
 /// Parses a report timestamp like "2026-10-10 12:13:30.00 +0400".
@@ -149,12 +185,14 @@ fn summarize(reports: Vec<(Report, SystemTime)>) -> Vec<Crashing> {
             label: None,
             system: r.system,
             reason: String::new(),
+            missing: None,
             last: SystemTime::UNIX_EPOCH,
         });
         c.count += 1;
         if at >= c.last {
             c.last = at;
             c.reason = r.reason;
+            c.missing = r.missing;
         }
         if c.label.is_none() {
             c.label = r.label;
@@ -198,6 +236,14 @@ mod tests {
         .unwrap();
         assert_eq!(r.at, Some(at));
         assert_eq!(r.incident, "ABC");
+    }
+
+    #[test]
+    fn names_the_missing_library() {
+        let body = r#"{"procName":"mysqld","termination":{"indicator":"Library missing","reasons":["Library not loaded: /opt/homebrew/opt/icu4c/lib/libicuuc.74.dylib","Referenced from: x"]}}"#;
+        let r = parse(&format!("{{\"name\":\"mysqld\"}}\n{body}")).unwrap();
+        assert_eq!(r.reason, "Library missing");
+        assert_eq!(r.missing.as_deref(), Some("libicuuc.74.dylib"));
     }
 
     #[test]

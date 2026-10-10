@@ -125,13 +125,40 @@ fn big_repos(out: &mut Vec<Check>) {
                 Status::Warn,
                 format!("{} is a git repository", tilde(&dir)),
                 format!(
-                    "Every folder under {} is part of one huge working tree, so editors, agent hosts and git tools that check a folder without its own repository scan all of it (on one Mac: 20 s and 8 CPU-s per check, twice a minute).",
-                    tilde(&dir)
+                    "Every folder under {} is part of one huge working tree, so editors, agent hosts and git tools that check a folder without its own repository scan all of it (on one Mac: 20 s and 8 CPU-s per check, twice a minute).{}",
+                    tilde(&dir),
+                    repo_use(&dir)
                 ),
                 format!("If you don't use it, move it aside: mv {} {}", tilde(&git), tilde(&to)),
             )
             .with(Action::MoveAside { from: git, to }),
         );
+    }
+}
+
+/// How much a repository is used, to help decide whether it can go: " It
+/// tracks 12 files; the last commit was 3 years ago."
+fn repo_use(dir: &Path) -> String {
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let files = git(&["ls-files"]).map_or(0, |o| o.lines().count());
+    let last = git(&["log", "-1", "--format=%cr"]).map(|o| o.trim().to_string()).filter(|s| !s.is_empty());
+    let files = match files {
+        0 => "It tracks no files".to_string(),
+        1 => "It tracks 1 file".to_string(),
+        n => format!("It tracks {n} files"),
+    };
+    match last {
+        Some(when) => format!(" {files}; the last commit was {when}."),
+        None => format!(" {files} and has no commits."),
     }
 }
 
@@ -360,26 +387,51 @@ fn prewarm(linked: &[&Worktree], all: &[Worktree], out: &mut Vec<Check>) {
     }
 }
 
-/// Programs that keep crashing; at most three, most crashes first.
+/// Programs that keep crashing; at most three, most crashes first. One
+/// that stopped crashing a while ago is only mentioned.
 fn crash_loops(out: &mut Vec<Check>) {
     let loaded = loaded_jobs();
     for c in crate::crashes::recent().into_iter().take(3) {
         let ago = c.last.elapsed().unwrap_or_default().as_secs();
         let ago = if ago < 3600 { format!("{} min", ago / 60) } else { format!("{} h", ago / 3600) };
         let reason = if c.reason.is_empty() { String::new() } else { format!(" ({})", c.reason) };
-        let title = format!("{} crashed {} times in the last 24 hours", c.name, c.count);
-        let detail = format!(
+        let active = c.active();
+        let title = if active {
+            format!("{} crashed {} times in the last 24 hours", c.name, c.count)
+        } else {
+            format!("{} crashed {} times in the last 24 hours, but not since {ago} ago", c.name, c.count)
+        };
+        let mut detail = format!(
             "Each crash makes ReportCrash write a report, often seconds of CPU each, and a service that restarts crashes again. Last crash {ago} ago{reason}."
         );
+        // A missing library usually means Homebrew updated a dependency
+        // under it; reinstalling links it against the new one.
+        let reinstall = (c.reason == "Library missing").then(|| crate::crashes::homebrew_formula_of(&c.name)).flatten();
+        if let (Some(f), Some(lib)) = (&reinstall, &c.missing) {
+            detail.push_str(&format!(
+                " It can't find {lib}, probably removed by a Homebrew update; {f} needs reinstalling."
+            ));
+        }
+        let fix_crash = |stop: String| match &reinstall {
+            Some(f) => format!("brew reinstall {f}   (or {stop})"),
+            None => format!("Fix what makes it crash, or {stop}"),
+        };
         let check = match (&c.label, c.brew_formula()) {
             // Stopped since (only this user's launchd jobs are listed, so a
             // root service started with `sudo brew services` lands here too).
             (Some(label), _) if !loaded.contains(label) => continue,
+            _ if !active => {
+                let fix = match &reinstall {
+                    Some(f) => format!("Before it runs again: brew reinstall {f}"),
+                    None => String::new(),
+                };
+                check(Status::Info, title, detail, fix)
+            }
             (Some(_), Some(f)) => check(
                 Status::Warn,
                 title,
                 detail,
-                format!("brew services stop {f}   (start it again with brew services start {f})"),
+                fix_crash(format!("stop it: brew services stop {f}   (start it again with brew services start {f})")),
             )
             .with(Action::StopService { formula: f.to_string() }),
             (Some(label), None) => check(
@@ -387,14 +439,14 @@ fn crash_loops(out: &mut Vec<Check>) {
                 title,
                 detail,
                 // SAFETY: getuid has no preconditions.
-                format!("Fix what makes it crash, or stop it: launchctl bootout gui/{}/{label}", unsafe {
-                    libc::getuid()
-                }),
+                fix_crash(format!("stop it: launchctl bootout gui/{}/{label}", unsafe { libc::getuid() })),
             ),
             (None, _) if c.system => {
                 check(Status::Info, title, detail, "This is part of macOS; restarting the Mac usually clears it.")
             }
-            (None, _) => check(Status::Warn, title, detail, format!("Fix or stop whatever keeps starting {}.", c.name)),
+            (None, _) => {
+                check(Status::Warn, title, detail, fix_crash(format!("stop whatever keeps starting {}", c.name)))
+            }
         };
         out.push(check);
     }
