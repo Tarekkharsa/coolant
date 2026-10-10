@@ -133,6 +133,11 @@ processes (`git`, `rg`, `node`, compilers), so on a machine like this every
 tool call costs more. There is nothing to fix from user space; prewarming and
 fewer cold builds help more here than on an unmanaged Mac.
 
+A second run on the same Mac, with no other agents busy, gave the same
+numbers (244–250 execs per second, 780–930 ms for a first exec), and new
+binaries then scaled to 2 agents at 98% efficiency. `coolant doctor` now
+measures program start time and names any active endpoint security extension.
+
 ## Method notes
 
 - CPU per category comes from sampling every process once per second
