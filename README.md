@@ -42,7 +42,8 @@ curl -fsSL https://raw.githubusercontent.com/Tarekkharsa/coolant/main/scripts/in
 ```
 
 It downloads the newest release, checks its SHA-256, puts Coolant in
-Applications and opens it. Coolant isn't notarized by Apple (that needs a
+Applications, links the `coolant` command (into `/usr/local/bin` or
+`~/.local/bin`) and opens the app. Coolant isn't notarized by Apple (that needs a
 paid developer account). macOS only runs that check on apps a browser (or
 Mail, AirDrop, …) marked as downloaded, so installing this way skips the
 "Apple could not verify" warning. The
@@ -54,7 +55,8 @@ Applications. The first launch is blocked: click **Done**, then **System
 Settings → Privacy & Security → Open Anyway** (once).
 
 The app includes the `coolant` command-line tool
-(`/Applications/Coolant.app/Contents/MacOS/coolant`).
+(`/Applications/Coolant.app/Contents/MacOS/coolant`), and the menu bar menu
+has **Open at Login**.
 
 **Command line only:**
 

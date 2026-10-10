@@ -1,6 +1,6 @@
 #!/bin/sh
-# Installs the newest Coolant into /Applications (or ~/Applications) and
-# opens it:
+# Installs the newest Coolant into /Applications (or ~/Applications), links
+# the coolant command, and opens the app:
 #
 #   curl -fsSL https://raw.githubusercontent.com/Tarekkharsa/coolant/main/scripts/install.sh | sh
 #
@@ -52,6 +52,28 @@ hdiutil attach -quiet -nobrowse -readonly -mountpoint "$tmp/mnt" "$tmp/Coolant.d
 rm -rf "$dest/Coolant.app"
 ditto "$tmp/mnt/Coolant.app" "$dest/Coolant.app"
 echo "Installed $dest/Coolant.app"
+
+# Make `coolant` work in Terminal: link the CLI inside the app into
+# /usr/local/bin if writable, else ~/.local/bin. Never replace a `coolant`
+# that isn't our own link (e.g. one from cargo install).
+if [ -z "${COOLANT_NO_LINK:-}" ]; then
+  cli="$dest/Coolant.app/Contents/MacOS/coolant"
+  bindir="$HOME/.local/bin"
+  if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then bindir=/usr/local/bin; fi
+  bindir="${COOLANT_BIN_DIR:-$bindir}"
+  mkdir -p "$bindir"
+  ours=""
+  case "$(readlink "$bindir/coolant" 2>/dev/null)" in *Coolant.app/*) ours=1 ;; esac
+  if { [ -e "$bindir/coolant" ] || [ -L "$bindir/coolant" ]; } && [ -z "$ours" ]; then
+    echo "Left $bindir/coolant alone (not installed by this script)."
+  else
+    ln -sf "$cli" "$bindir/coolant"
+    case ":$PATH:" in
+      *":$bindir:"*) echo "The coolant command is ready: try \`coolant doctor\`." ;;
+      *) echo "Linked $bindir/coolant; add $bindir to your PATH to use it in Terminal." ;;
+    esac
+  fi
+fi
 
 if [ -z "${COOLANT_NO_OPEN:-}" ]; then
   open "$dest/Coolant.app"
