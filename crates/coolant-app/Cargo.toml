@@ -15,6 +15,7 @@ coolant-platform.workspace = true
 coolant-core.workspace = true
 coolant-workspace.workspace = true
 libc.workspace = true
+serde_json.workspace = true
 # runtime_shaders: compile Metal shaders at launch, so building needs only the
 # Xcode command line tools rather than full Xcode.
 gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
@@ -23,3 +24,5 @@ gpui = { version = "=0.2.2", features = ["runtime_shaders"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"
+raw-window-handle = "0.6"
+block = "0.1"

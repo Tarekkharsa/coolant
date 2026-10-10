@@ -69,6 +69,9 @@ impl Config {
                 .map(|d| h.join(d))
                 .filter(|p| p.is_dir())
                 .collect();
+        // ~/code and ~/Code are one folder on a case-insensitive volume.
+        let mut seen = std::collections::BTreeSet::new();
+        roots.retain(|p| seen.insert(canonical(p)));
         // Repositories cloned straight into the home folder.
         roots.push(h);
         roots

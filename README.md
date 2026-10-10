@@ -104,35 +104,42 @@ processes that serve ports exposed through Tailscale Serve/Funnel.
 
 ## The Mac app
 
-<img src="docs/img/panel.png" alt="Coolant status panel" width="330" align="right">
+<img src="docs/img/panel.png" alt="Coolant status panel" width="300" align="right">
 
-Coolant is for everyone who runs agents, not only people at home in a terminal.
-It's a calm status panel, not another Activity Monitor:
+Coolant lives in the menu bar. Click the thermometer to drop down the status
+panel; right-click for Details, Launch at Login, Check for Updates and Quit.
 
 - **Cool, warm or hot, and why.** Judged over the last half minute, with the
   main cause in plain words when it's warm ("Spotlight is re-indexing files
-  your agents write, using about 2 cores"). The panel redraws every 10 s and a
-  new status has to hold for 15 s, so nothing jumps around.
-- **Fix it, one click each.** It finds the git worktrees your agents create,
-  whichever tool made them, and offers the fixes above as buttons: stop
-  Spotlight indexing them, stop backing them up, prewarm, clean up, stop the
-  extra copies of a dev server, stop a Homebrew service that keeps crashing.
-  Each one explains what it will do before it does it, and the Spotlight and
-  Time Machine changes have an Undo.
-- **Menu bar.** The temperature sits in the menu bar with a thermometer that
-  fills up when the Mac runs warm or hot; the menu repeats the status and the
-  cause. Closing the window keeps Coolant running there.
-- **Details** opens the full dashboard when you want to dig in: temperature,
-  power, busy cores and fan; where the CPU is going, with OS overhead in
-  orange; agent sessions, top processes, and leftover dev servers grouped by
-  project with a two-step Stop.
+  your agents write, using about 2 cores"). It redraws every 10 s and a new
+  status has to hold for 15 s, so nothing jumps around. After you apply a fix
+  it checks every few seconds for a while, and says so.
+- **Fix it, one click each,** with a confirm step that explains what will
+  happen, and an Undo where one is possible.
+- **Details** opens the full dashboard in its own window: temperature, power,
+  busy cores and fan; where the CPU is going; agent sessions, top processes,
+  and leftover dev servers grouped by project (Stop, or Keep running).
+- **Settings** (the gear): the folders Coolant watches, with *Add folder…*;
+  projects you keep running; Launch at login; updates.
+- **Updates** are checked once a day; *Update* downloads the new version,
+  checks its SHA-256, replaces the app and restarts it.
+
+### What happens after you install it
+
+Nothing changes on its own. Coolant looks for git projects in your usual code
+folders (`~/Documents/GitHub`, `~/Developer`, `~/code`, `~/src`, `~/projects`,
+`~/dev`, `~/work`, and projects directly in `~`; add others in Settings),
+finds every agent worktree inside them, whichever tool made it, and watches
+what's running. Problems show up under *Fix it*; nothing is moved, deleted or
+stopped until you click a fix and confirm it. There's no project or working
+directory to configure.
 
 <br clear="right">
 
 ![Coolant Details view](docs/img/dashboard.png)
 
 It samples every 10 s (every second only while Details is open) and idles at
-about 0.2% of one core (measured on a Mac mini M4). Built with
+about 0.2–0.3% of one core (measured on a Mac mini M4). Built with
 [GPUI](https://gpui.rs), Zed's GPU UI framework.
 
 ```sh

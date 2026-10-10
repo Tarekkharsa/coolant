@@ -1085,6 +1085,7 @@ checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
 name = "coolant-app"
 version = "0.2.0-beta.4"
 dependencies = [
+ "block",
  "cocoa 0.26.0",
  "coolant-core",
  "coolant-platform",
@@ -1092,6 +1093,8 @@ dependencies = [
  "gpui",
  "libc",
  "objc",
+ "raw-window-handle",
+ "serde_json",
 ]
 
 [[package]]

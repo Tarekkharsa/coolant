@@ -3,16 +3,14 @@
 //! seconds, so it reads like a status, not a monitor.
 
 use crate::Dashboard;
-use crate::fixes::button;
 use crate::theme::*;
+use crate::windows::UpdateState;
+use crate::{PanelMode, menubar};
 use coolant_core::classify::Category;
 use coolant_core::profile::Run;
 use coolant_workspace::doctor::Status as CheckStatus;
-use gpui::{Context, FontWeight, Rgba, div, prelude::*};
+use gpui::{Animation, AnimationExt, Context, FontWeight, Rgba, div, prelude::*, pulsating_between};
 use std::time::{Duration, Instant};
-
-/// Seconds of samples the status is judged on.
-const WINDOW_S: f64 = 30.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Level {
@@ -85,10 +83,10 @@ pub struct Reading {
     pub cause: Option<String>,
 }
 
-/// Judges the last [`WINDOW_S`] seconds of `run`.
-pub fn read(run: &Run) -> Option<Reading> {
+/// Judges the last `window_s` seconds of `run`.
+pub fn read(run: &Run, window_s: f64) -> Option<Reading> {
     let last = run.samples.last()?;
-    let recent: Vec<_> = run.samples.iter().filter(|s| last.t - s.t <= WINDOW_S).collect();
+    let recent: Vec<_> = run.samples.iter().filter(|s| last.t - s.t <= window_s).collect();
     let n = recent.len() as f64;
     let busy = recent.iter().map(|s| s.busy_cores).sum::<f64>() / n;
     let cat = |c: Category| recent.iter().map(|s| s.categories.get(&c).copied().unwrap_or(0.0)).sum::<f64>() / n;
@@ -167,38 +165,72 @@ pub fn friendly(c: Category) -> &'static str {
 }
 
 impl Dashboard {
-    pub fn summary(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let reading = self.reading.as_ref();
+    /// The status panel's content: the status, or Settings.
+    pub fn panel_content(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        match self.mode {
+            PanelMode::Status => self.status_view(cx).into_any_element(),
+            PanelMode::Settings => self.settings_view(cx).into_any_element(),
+        }
+    }
+
+    fn status_view(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+        let reading = self.reading.clone();
         let level = self.level;
-        let (title, line) = match (reading, &self.error) {
+        let (title, line) = match (&reading, &self.error) {
             (_, Some(e)) => ("Can't read this Mac".to_string(), e.clone()),
             (None, _) => ("Checking…".to_string(), "taking the first samples".to_string()),
             (Some(r), _) => (level.title().to_string(), r.line.clone()),
         };
         let badge = div()
             .flex_none()
-            .size_10()
+            .size_9()
             .rounded_lg()
             .flex()
             .items_center()
             .justify_center()
             .bg(tint(level.color()))
             .text_color(level.color())
-            .text_lg()
             .font_weight(FontWeight::BOLD)
             .child(if level == Level::Cool { "✓" } else { "!" });
-        let header = div().flex().items_center().gap_3().child(badge).child(
-            div()
-                .flex()
-                .flex_col()
-                .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(title))
-                .child(div().text_xs().text_color(MUTED).child(line)),
-        );
+        let gear = icon_button("settings", "⚙").on_click(cx.listener(|this, _ev, _window, cx| {
+            this.mode = PanelMode::Settings;
+            cx.notify();
+        }));
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(badge)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(title))
+                    .child(div().text_xs().text_color(MUTED).child(line)),
+            )
+            .child(gear);
 
         let mut body = div().flex().flex_col().gap_3().child(header);
+        if self.settling() {
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(MUTED)
+                    .child(pulse(div().size_2().rounded_full().bg(ACCENT), "settle"))
+                    .child("Checking again every few seconds while the Mac settles…"),
+            );
+        }
         // The cause explains warm or hot; when cool, busy cores are fine.
-        if let Some(cause) = reading.and_then(|r| r.cause.clone()).filter(|_| level != Level::Cool) {
+        if let Some(cause) = reading.and_then(|r| r.cause).filter(|_| level != Level::Cool) {
             body = body.child(div().rounded_lg().bg(TRACK).px_3().py_2().text_sm().child(cause));
+        }
+        if let Some(banner) = self.update_banner(cx) {
+            body = body.child(banner);
         }
 
         // Fix it: results, open fixes, leftovers.
@@ -211,11 +243,10 @@ impl Dashboard {
                     format!("{n} dev process(es) left running"),
                     format!("in {} project(s), from sessions that ended", leftover.len()),
                 )
-                .child(button(("review", 0), "Review", TRACK).on_click(cx.listener(
-                    |this, _ev, window, cx| {
-                        this.set_details(true, window, cx);
-                    },
-                ))),
+                .child(
+                    crate::fixes::button(("review", 0), "Review", TRACK)
+                        .on_click(cx.listener(|this, _ev, _window, cx| this.open_details(cx))),
+                ),
             );
         }
         if !fixes.is_empty() {
@@ -234,6 +265,10 @@ impl Dashboard {
                 .children(ok.into_iter().map(|t| div().text_sm().text_color(GOOD).child(format!("✓ {t}"))));
         }
 
+        let watching = match self.fixes.repos() {
+            None => "Looking for your projects…".to_string(),
+            Some(n) => format!("Watching {n} project(s)"),
+        };
         let footer = div()
             .mt_1()
             .pt_3()
@@ -244,16 +279,166 @@ impl Dashboard {
             .items_center()
             .text_xs()
             .text_color(MUTED)
-            .child("Updates every 10 s")
+            .child(
+                div()
+                    .id("watching")
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(TEXT))
+                    .child(format!("{watching} · Change"))
+                    .on_click(cx.listener(|this, _ev, _window, cx| {
+                        this.mode = PanelMode::Settings;
+                        cx.notify();
+                    })),
+            )
             .child(
                 div()
                     .id("details")
                     .cursor_pointer()
                     .text_color(ACCENT)
                     .child("Details ›")
-                    .on_click(cx.listener(|this, _ev, window, cx| this.set_details(true, window, cx))),
+                    .on_click(cx.listener(|this, _ev, _window, cx| this.open_details(cx))),
             );
         body.child(footer)
+    }
+
+    fn update_banner(&mut self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let card = || div().flex().items_center().gap_3().rounded_lg().bg(tint(ACCENT)).px_3().py_2().text_sm();
+        match &self.update {
+            UpdateState::Available(r) => Some(
+                card().child(div().flex_1().child(format!("Coolant {} is available", r.version))).child(
+                    crate::fixes::button(("update", 0), "Update", ACCENT)
+                        .on_click(cx.listener(|this, _ev, _window, cx| this.install_update(cx))),
+                ),
+            ),
+            UpdateState::Installing(v) => Some(
+                card()
+                    .child(pulse(div().size_2().rounded_full().bg(ACCENT), "installing"))
+                    .child(format!("Installing {v}; Coolant will restart…")),
+            ),
+            _ => None,
+        }
+    }
+
+    fn settings_view(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+        let back = icon_button("back", "‹").on_click(cx.listener(|this, _ev, _window, cx| {
+            this.mode = PanelMode::Status;
+            cx.notify();
+        }));
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(back)
+            .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("Settings"));
+
+        // Project folders.
+        let mut folders = div().flex().flex_col().gap_1().child(
+            div()
+                .text_xs()
+                .text_color(MUTED)
+                .child("Coolant finds git projects in these folders and checks the agent worktrees inside them, whichever tool made them. Nothing changes until you click a fix."),
+        );
+        for (i, f) in self.watched_folders().into_iter().enumerate() {
+            let label = if f == coolant_workspace::config::home() {
+                "~ (top level only)".to_string()
+            } else {
+                coolant_workspace::config::tilde(&f)
+            };
+            folders = folders.child(
+                list_row(label).child(
+                    text_button(("rm-folder", i), "Remove")
+                        .on_click(cx.listener(move |this, _ev, _window, cx| this.remove_folder(&f, cx))),
+                ),
+            );
+        }
+        folders = folders.child(
+            div().pt_1().flex().child(
+                crate::fixes::button(("add-folder", 0), "Add folder…", TRACK)
+                    .on_click(cx.listener(|this, _ev, _window, cx| this.add_folder(cx))),
+            ),
+        );
+
+        // Kept running (protected paths).
+        let kept = coolant_workspace::config::Config::load().unwrap_or_default().protect;
+        let mut keep = div().flex().flex_col().gap_1();
+        if kept.is_empty() {
+            keep = keep.child(
+                div()
+                    .text_xs()
+                    .text_color(MUTED)
+                    .child("Nothing yet. Keep running on a leftover dev server adds its project here."),
+            );
+        }
+        for (i, k) in kept.into_iter().enumerate() {
+            keep = keep.child(
+                list_row(k.clone()).child(
+                    text_button(("rm-kept", i), "Remove")
+                        .on_click(cx.listener(move |this, _ev, _window, cx| this.remove_kept(&k, cx))),
+                ),
+            );
+        }
+
+        // General.
+        let mut general = div().flex().flex_col().gap_2();
+        if menubar::can_launch_at_login() {
+            let on = menubar::launches_at_login();
+            general = general.child(
+                list_row("Launch at login".into()).child(
+                    crate::fixes::button(("login", 0), if on { "On" } else { "Off" }, if on { ACCENT } else { TRACK })
+                        .on_click(cx.listener(move |_, _ev, _window, cx| {
+                            menubar::set_launch_at_login(!on);
+                            cx.notify();
+                        })),
+                ),
+            );
+        }
+        let (status, action): (String, Option<(&'static str, bool)>) = match &self.update {
+            UpdateState::Idle => (format!("Version {}", crate::update::CURRENT), Some(("Check now", false))),
+            UpdateState::Checking => ("Checking for updates…".into(), None),
+            UpdateState::UpToDate => {
+                (format!("Version {} · up to date", crate::update::CURRENT), Some(("Check now", false)))
+            }
+            UpdateState::Available(r) => {
+                (format!("Version {} · {} available", crate::update::CURRENT, r.version), Some(("Update", true)))
+            }
+            UpdateState::Installing(v) => (format!("Installing {v}…"), None),
+            UpdateState::Failed(e) => (format!("Update failed: {e}"), Some(("Try again", false))),
+        };
+        let mut updates = list_row(status);
+        if let Some((label, install)) = action {
+            updates = updates.child(
+                crate::fixes::button(("updates", 0), label, if install { ACCENT } else { TRACK }).on_click(
+                    cx.listener(
+                        move |this, _ev, _window, cx| {
+                            if install { this.install_update(cx) } else { this.check_updates(false, cx) }
+                        },
+                    ),
+                ),
+            );
+        }
+        general = general.child(updates);
+
+        let quit = div()
+            .mt_1()
+            .pt_3()
+            .border_t_1()
+            .border_color(BORDER)
+            .flex()
+            .justify_end()
+            .child(text_button(("quit", 0), "Quit Coolant").on_click(cx.listener(|_, _ev, _window, cx| cx.quit())));
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(header)
+            .child(section("Project folders"))
+            .child(folders)
+            .child(section("Kept running"))
+            .child(keep)
+            .child(section("General"))
+            .child(general)
+            .child(quit)
     }
 }
 
@@ -280,8 +465,41 @@ fn row(title: String, sub: String) -> gpui::Div {
     )
 }
 
+/// A settings row: a label, and whatever controls are added with `.child`.
+fn list_row(label: String) -> gpui::Div {
+    div().flex().items_center().gap_2().py_0p5().child(div().flex_1().min_w_0().text_sm().child(label))
+}
+
 fn section(title: &'static str) -> gpui::Div {
     div().mt_1().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(MUTED).child(title.to_uppercase())
+}
+
+fn icon_button(id: &'static str, glyph: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .size_7()
+        .rounded_md()
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .text_color(MUTED)
+        .hover(|s| s.bg(TRACK).text_color(TEXT))
+        .child(glyph)
+}
+
+fn text_button(id: (&'static str, usize), label: &'static str) -> gpui::Stateful<gpui::Div> {
+    div().id(id).flex_none().cursor_pointer().text_xs().text_color(MUTED).hover(|s| s.text_color(TEXT)).child(label)
+}
+
+/// Gently pulses an element: shown while something is in progress.
+pub fn pulse(el: gpui::Div, id: &'static str) -> impl IntoElement {
+    el.with_animation(
+        id,
+        Animation::new(Duration::from_millis(1400)).repeat().with_easing(pulsating_between(0.25, 1.0)),
+        |el, a| el.opacity(a),
+    )
 }
 
 fn tint(c: Rgba) -> Rgba {
@@ -310,20 +528,24 @@ mod tests {
         run
     }
 
+    fn read30(run: &Run) -> Option<Reading> {
+        read(run, 30.0)
+    }
+
     #[test]
     fn levels() {
-        let idle = read(&run(0.8, 0.0, 45.0, ThermalPressure::Nominal)).unwrap();
+        let idle = read30(&run(0.8, 0.0, 45.0, ThermalPressure::Nominal)).unwrap();
         assert_eq!(idle.level, Level::Cool);
         assert_eq!(idle.cause, None);
         assert_eq!(idle.line, "45°C · fan quiet · 0.8 busy cores");
 
-        let spotlight = read(&run(2.0, 1.9, 55.0, ThermalPressure::Nominal)).unwrap();
+        let spotlight = read30(&run(2.0, 1.9, 55.0, ThermalPressure::Nominal)).unwrap();
         assert_eq!(spotlight.level, Level::Warm);
         assert!(spotlight.cause.unwrap().starts_with("Spotlight is re-indexing"));
 
-        assert_eq!(read(&run(1.0, 0.0, 60.0, ThermalPressure::Heavy)).unwrap().level, Level::Hot);
-        assert_eq!(read(&run(8.0, 0.0, 60.0, ThermalPressure::Nominal)).unwrap().level, Level::Hot);
-        assert!(read(&Run::default()).is_none());
+        assert_eq!(read30(&run(1.0, 0.0, 60.0, ThermalPressure::Heavy)).unwrap().level, Level::Hot);
+        assert_eq!(read30(&run(8.0, 0.0, 60.0, ThermalPressure::Nominal)).unwrap().level, Level::Hot);
+        assert!(read(&Run::default(), 30.0).is_none());
     }
 
     #[test]

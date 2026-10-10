@@ -5,23 +5,22 @@
 //! only redraws on `notify`, so the dashboard costs almost nothing between
 //! ticks, which matters for a tool whose job is to find heat.
 //!
-//! The app lives in the menu bar: closing the window keeps it sampling, and
-//! the menu bar item (or the Dock icon) brings the dashboard back.
+//! The app lives in the menu bar: clicking the icon drops down the status
+//! panel; Details opens the full dashboard in its own window.
 
 mod fixes;
 mod menubar;
 mod stacks;
 mod summary;
 mod theme;
+mod update;
 mod widgets;
+mod windows;
 
 use coolant_core::classify::Category;
 use coolant_core::profile::{Options, Run, Session};
 use coolant_core::report::{self, Severity};
-use gpui::{
-    App, Application, Bounds, Context, Entity, FontWeight, KeyBinding, Menu, MenuItem, SharedString, TitlebarOptions,
-    Window, WindowBounds, WindowOptions, actions, div, prelude::*, px, size,
-};
+use gpui::{App, Application, Context, Entity, FontWeight, KeyBinding, SharedString, actions, div, prelude::*};
 use stacks::Stack;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -45,9 +44,13 @@ const SAMPLE_LIVE: u64 = 1000;
 const PAINT_EVERY: Duration = Duration::from_secs(10);
 /// A new Cool/Warm/Hot level must hold this long before it shows.
 const LEVEL_HOLD: Duration = Duration::from_secs(15);
-/// Window sizes of the status panel and of Details.
-const PANEL: (f32, f32) = (440., 640.);
-const DETAILS: (f32, f32) = (1120., 860.);
+/// After a fix, the panel watches closely for this long: samples every
+/// [`SAMPLE_SETTLE`] ms, judged over a shorter window, a shorter hold.
+const SETTLE_FOR: Duration = Duration::from_secs(45);
+const SAMPLE_SETTLE: u64 = 2000;
+const SETTLE_HOLD: Duration = Duration::from_secs(4);
+/// How often to look for a new version.
+const UPDATE_EVERY: Duration = Duration::from_secs(24 * 3600);
 
 /// Milliseconds between samples; the UI switches it with Details.
 static SAMPLE_MS: AtomicU64 = AtomicU64::new(SAMPLE_CALM);
@@ -55,6 +58,19 @@ static SAMPLE_MS: AtomicU64 = AtomicU64::new(SAMPLE_CALM);
 const CHECKS_EVERY: u64 = 300;
 
 actions!(coolant, [Quit, CloseWindow]);
+
+/// What the status panel shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelMode {
+    #[default]
+    Status,
+    Settings,
+}
+
+thread_local! {
+    /// For callbacks registered before the app's state exists (Dock reopen).
+    static DASH: std::cell::RefCell<Option<Entity<Dashboard>>> = const { std::cell::RefCell::new(None) };
+}
 
 /// What the sampler thread hands to the UI.
 struct Update {
@@ -70,8 +86,18 @@ pub struct Dashboard {
     status: Option<SharedString>,
     error: Option<String>,
     fixes: fixes::Fixes,
-    /// Showing the full dashboard rather than the status panel.
+    /// The Details window is open (samples every second, redraws each one).
     details: bool,
+    panel_window: Option<windows::PanelHandle>,
+    details_window: Option<windows::DetailsHandle>,
+    panel_closed_at: Option<Instant>,
+    mode: PanelMode,
+    /// Watching closely after a fix until then.
+    settle_until: Option<Instant>,
+    update: windows::UpdateState,
+    update_checked: Option<Instant>,
+    /// Screenshot mode: no menu bar item, Details made taller.
+    screenshot: bool,
     reading: Option<summary::Reading>,
     /// The level shown, which changes only after [`LEVEL_HOLD`].
     level: Level,
@@ -80,7 +106,7 @@ pub struct Dashboard {
 }
 
 impl Dashboard {
-    fn new(error: Option<String>, cx: &mut Context<Self>) -> Self {
+    fn new(error: Option<String>, screenshot: bool, cx: &mut Context<Self>) -> Self {
         let mut d = Dashboard {
             run: None,
             stacks: Vec::new(),
@@ -89,6 +115,14 @@ impl Dashboard {
             error,
             fixes: fixes::Fixes::default(),
             details: false,
+            panel_window: None,
+            details_window: None,
+            panel_closed_at: None,
+            mode: PanelMode::Status,
+            settle_until: None,
+            update: windows::UpdateState::Idle,
+            update_checked: None,
+            screenshot,
             reading: None,
             level: Level::Cool,
             hold: summary::Hold::default(),
@@ -101,27 +135,31 @@ impl Dashboard {
     /// Takes a new sample; returns whether the window should redraw.
     fn apply(&mut self, u: Update) -> bool {
         let first = self.run.is_none();
-        self.reading = summary::read(&u.run);
+        let settling = self.settling();
+        self.reading = summary::read(&u.run, if settling { 12.0 } else { 30.0 });
         self.run = Some(u.run);
         if let Some(s) = u.stacks {
             self.stacks = s;
         }
         if let Some(r) = &self.reading {
-            self.level = self.hold.update(r.level, Instant::now(), LEVEL_HOLD);
+            let hold = if settling { SETTLE_HOLD } else { LEVEL_HOLD };
+            self.level = self.hold.update(r.level, Instant::now(), hold);
         }
-        let paint = first || self.details || self.last_paint.elapsed() >= PAINT_EVERY;
+        let paint = first || self.details || settling || self.last_paint.elapsed() >= PAINT_EVERY;
         if paint {
             self.last_paint = Instant::now();
         }
         paint
     }
 
-    fn set_details(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.details = on;
-        SAMPLE_MS.store(if on { SAMPLE_LIVE } else { SAMPLE_CALM }, Ordering::Relaxed);
-        let (w, h) = if on { DETAILS } else { PANEL };
-        window.resize(size(px(w), px(h)));
-        cx.notify();
+    /// Something was just fixed: watch closely for a while, so the status
+    /// catches up in seconds rather than minutes.
+    pub fn settle(&mut self) {
+        self.settle_until = Some(Instant::now() + SETTLE_FOR);
+    }
+
+    pub fn settling(&self) -> bool {
+        self.settle_until.is_some_and(|t| Instant::now() < t)
     }
 }
 
@@ -176,7 +214,10 @@ impl Dashboard {
                                 this.confirm = None;
                                 if let Some(st) = this.stacks.iter().find(|s| s.key == key).cloned() {
                                     this.status = Some(match stacks::stop(&st) {
-                                        Ok(n) => format!("Sent SIGTERM to {n} process(es) in {}", st.key).into(),
+                                        Ok(n) => {
+                                            this.settle();
+                                            format!("Sent SIGTERM to {n} process(es) in {}", st.key).into()
+                                        }
                                         Err(e) => e.into(),
                                     });
                                     this.stacks.retain(|s| s.key != key);
@@ -257,13 +298,9 @@ fn start_sampler(shared: Arc<Mutex<Option<Update>>>) -> Result<(), String> {
     Ok(())
 }
 
-impl Render for Dashboard {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root =
-            div().id("root").size_full().overflow_y_scroll().bg(BG).text_color(TEXT).font_family(".SystemUIFont");
-        if !self.details {
-            return root.p_4().child(self.summary(cx));
-        }
+impl Dashboard {
+    /// The Details window's content: the full live dashboard.
+    fn details_content(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let ready = self.error.is_none() && self.run.as_ref().is_some_and(|r| r.samples.len() >= 2);
         let leftovers = ready.then(|| self.leftovers(cx));
         let body = match (&self.run, &self.error) {
@@ -272,21 +309,14 @@ impl Render for Dashboard {
             (Some(run), _) if run.samples.len() < 2 => placeholder("Taking the first samples…".to_string()),
             (Some(run), _) => content(run),
         };
-        let back = div()
-            .id("back")
-            .cursor_pointer()
-            .text_sm()
-            .text_color(ACCENT)
-            .child("‹ Back")
-            .on_click(cx.listener(|this, _ev, window, cx| this.set_details(false, window, cx)));
-        root.p_5()
+        div()
             .flex()
             .flex_col()
             .gap_4()
-            .child(back)
             .child(header(self.run.as_ref()))
             .child(body)
             .children(leftovers)
+            .into_any_element()
     }
 }
 
@@ -477,38 +507,6 @@ fn placeholder(msg: String) -> gpui::AnyElement {
     div().pt_8().text_color(MUTED).child(SharedString::from(msg)).into_any_element()
 }
 
-fn window_options(cx: &App, screenshot: bool, details: bool) -> WindowOptions {
-    let (w, h) = if details { DETAILS } else { PANEL };
-    let mut bounds = Bounds::centered(None, size(px(w), px(h)), cx);
-    if screenshot && let Some(display) = cx.primary_display() {
-        let screen = display.bounds();
-        if details {
-            bounds.size.height = px(1300.).min(screen.size.height - px(60.));
-        }
-        bounds.origin = gpui::point(screen.origin.x + screen.size.width - bounds.size.width, screen.origin.y + px(40.));
-    }
-    WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: Some(TitlebarOptions { title: Some("coolant".into()), ..Default::default() }),
-        ..Default::default()
-    }
-}
-
-/// Brings the dashboard window forward, opening it if it was closed.
-fn show_dashboard(dash: &Entity<Dashboard>, cx: &mut App) {
-    match cx.windows().first() {
-        Some(w) => {
-            let _ = w.update(cx, |_, window, _| window.activate_window());
-        }
-        None => {
-            let details = dash.read(cx).details;
-            let dash = dash.clone();
-            let _ = cx.open_window(window_options(cx, false, details), move |_, _| dash);
-        }
-    }
-    cx.activate(true);
-}
-
 /// Apps started from Finder get a minimal PATH; add the usual places for
 /// git and the Tailscale CLI, which the safety checks rely on.
 fn extend_path() {
@@ -525,60 +523,101 @@ fn extend_path() {
 
 fn main() {
     extend_path();
-    // COOLANT_SCREENSHOT_SECS=N: a taller window at the screen's right edge
-    // that quits after N seconds. Used with scripts/screenshot.sh, which
-    // builds against a GPUI patched to save its frames.
+    // COOLANT_SCREENSHOT_SECS=N: no menu bar item, the panel at the top
+    // right (or Details with COOLANT_SCREENSHOT_DETAILS=1), quit after N
+    // seconds. Used with scripts/screenshot.sh, which builds against a GPUI
+    // patched to save its frames.
     let screenshot_secs: Option<u64> = std::env::var("COOLANT_SCREENSHOT_SECS").ok().and_then(|s| s.parse().ok());
     let app = Application::new();
-    // Clicking the Dock icon with the window closed: same as "Open coolant".
-    app.on_reopen(|_| menubar::OPEN_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst));
+    // Opening Coolant again (Finder, Spotlight) shows the panel.
+    app.on_reopen(|cx| {
+        if let Some(d) = DASH.with(|d| d.borrow().clone()) {
+            d.update(cx, |d, cx| d.open_panel(cx));
+        }
+    });
     app.run(move |cx: &mut App| {
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(|_: &CloseWindow, cx| {
-            for w in cx.windows() {
+            if let Some(w) = cx.active_window() {
                 let _ = w.update(cx, |_, window, _| window.remove_window());
             }
         });
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None), KeyBinding::new("cmd-w", CloseWindow, None)]);
-        cx.set_menus(vec![Menu {
-            name: "coolant".into(),
-            items: vec![
-                MenuItem::action("Close Window", CloseWindow),
-                MenuItem::separator(),
-                MenuItem::action("Quit coolant", Quit),
-            ],
-        }]);
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("cmd-w", CloseWindow, None),
+            KeyBinding::new("escape", windows::ClosePanel, Some("Panel")),
+        ]);
 
+        let screenshot = screenshot_secs.is_some();
         let shared = Arc::new(Mutex::new(None));
         let error = start_sampler(shared.clone()).err();
-        let dash = cx.new(|cx| Dashboard::new(error, cx));
-        let screenshot = screenshot_secs.is_some();
-        // COOLANT_SCREENSHOT_DETAILS=1 captures Details instead of the panel.
-        let details = screenshot && std::env::var_os("COOLANT_SCREENSHOT_DETAILS").is_some();
-        if details {
-            dash.update(cx, |d, _| d.details = true);
-            SAMPLE_MS.store(SAMPLE_LIVE, Ordering::Relaxed);
-        }
-        {
-            let dash = dash.clone();
-            cx.open_window(window_options(cx, screenshot, details), move |_, _| dash).expect("failed to open window");
-        }
-        cx.activate(true);
-        let menubar = (!screenshot).then(menubar::MenuBar::new);
+        let dash = cx.new(|cx| Dashboard::new(error, screenshot, cx));
+        DASH.with(|d| *d.borrow_mut() = Some(dash.clone()));
 
-        // The app's heartbeat: hand new samples to the dashboard and the menu
-        // bar, open the window on request, re-check the setup now and then.
+        let menubar = if screenshot {
+            None
+        } else {
+            menubar::become_accessory();
+            let weak = dash.downgrade();
+            let async_cx = cx.to_async();
+            Some(menubar::MenuBar::new(move |event| {
+                let _ = async_cx.update(|cx| {
+                    if let Some(d) = weak.upgrade() {
+                        d.update(cx, |d, cx| d.on_menu(event, cx));
+                    }
+                });
+            }))
+        };
+
+        // Show the panel at launch, so a new user sees where Coolant lives;
+        // not when it starts with the Mac (Launch at Login), which would
+        // pop it up at every login. The status item needs a moment to get
+        // its place.
+        let details = screenshot && std::env::var_os("COOLANT_SCREENSHOT_DETAILS").is_some();
+        let show = screenshot || !menubar::launches_at_login();
+        let first = dash.clone();
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(Duration::from_millis(400)).await;
+            let _ = cx.update(|cx| {
+                first.update(cx, |d, cx| {
+                    if details {
+                        d.open_details(cx)
+                    } else if show {
+                        d.open_panel(cx)
+                    }
+                })
+            });
+        })
+        .detach();
+
+        // The heartbeat: hand new samples to the dashboard and the menu bar,
+        // pace the sampler, re-check the setup and look for updates now and
+        // then.
         let heartbeat_dash = dash.clone();
         cx.spawn(async move |cx| {
             let dash = heartbeat_dash;
             let mut ticks = 0u64;
+            let started = Instant::now();
             loop {
                 cx.background_executor().timer(Duration::from_millis(250)).await;
                 ticks += 1;
                 let alive = cx.update(|cx| {
-                    if menubar::OPEN_REQUESTED.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                        show_dashboard(&dash, cx);
-                    }
+                    dash.update(cx, |d, cx| {
+                        d.details = d.details_open(cx);
+                        let ms = if d.details {
+                            SAMPLE_LIVE
+                        } else if d.settling() {
+                            SAMPLE_SETTLE
+                        } else {
+                            SAMPLE_CALM
+                        };
+                        SAMPLE_MS.store(ms, Ordering::Relaxed);
+                        let due = d.update_checked.is_none_or(|t| t.elapsed() >= UPDATE_EVERY);
+                        if !d.screenshot && due && started.elapsed() > Duration::from_secs(8) {
+                            d.update_checked = Some(Instant::now());
+                            d.check_updates(true, cx);
+                        }
+                    });
                     let update = shared.lock().unwrap().take();
                     if let Some(u) = update {
                         dash.update(cx, |d, cx| {
@@ -588,8 +627,7 @@ fn main() {
                         });
                         let d = dash.read(cx);
                         if let (Some(mb), Some(r)) = (&menubar, &d.reading) {
-                            let summary = format!("{} · {}", d.level.title(), r.line);
-                            mb.update(&format!("{:.0}°", r.temp_c), &summary, r.cause.as_deref().unwrap_or(""));
+                            mb.set_title(&format!("{:.0}°", r.temp_c));
                             mb.set_symbol(d.level.symbol());
                         }
                     }
@@ -605,7 +643,7 @@ fn main() {
         .detach();
 
         if let Some(secs) = screenshot_secs {
-            // COOLANT_SCREENSHOT_SCRIPT="4:fix:Spotlight;6:fix:Spotlight;10:undo;12:details"
+            // COOLANT_SCREENSHOT_SCRIPT="4:fix:Spotlight;6:fix:Spotlight;10:undo;12:settings"
             // clicks Fix buttons and switches views at the given seconds.
             if let Ok(script) = std::env::var("COOLANT_SCREENSHOT_SCRIPT") {
                 let dash = dash.clone();
@@ -616,22 +654,24 @@ fn main() {
                         cx.background_executor().timer(Duration::from_secs_f64((t - at).max(0.0))).await;
                         at = t;
                         let _ = cx.update(|cx| {
-                            // "details" / "panel" switch views; the rest are clicks.
-                            if let Some(w) = cx.windows().first().copied()
-                                && (step == "details" || step == "panel")
-                            {
-                                let _ = w.update(cx, |_, window, cx| {
-                                    dash.update(cx, |d, cx| d.set_details(step == "details", window, cx))
-                                });
-                            } else {
-                                dash.update(cx, |d, cx| d.script_step(step, cx));
-                            }
+                            dash.update(cx, |d, cx| match step {
+                                "details" => d.open_details(cx),
+                                "settings" => {
+                                    d.mode = PanelMode::Settings;
+                                    cx.notify();
+                                }
+                                "check" => d.check_updates(false, cx),
+                                "status" => {
+                                    d.mode = PanelMode::Status;
+                                    cx.notify();
+                                }
+                                _ => d.script_step(step, cx),
+                            })
                         });
                     }
                 })
                 .detach();
             }
-            cx.on_window_closed(|cx| cx.quit()).detach();
             cx.spawn(async move |cx| {
                 cx.background_executor().timer(Duration::from_secs(secs)).await;
                 let _ = cx.update(|cx| cx.quit());

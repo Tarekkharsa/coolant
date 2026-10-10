@@ -25,6 +25,8 @@ pub struct Fixes {
     confirm: Option<(String, String)>,
     results: Vec<Outcome>,
     next_id: usize,
+    /// Repositories found by the last check, once it has run.
+    repos: Option<usize>,
 }
 
 struct Outcome {
@@ -37,6 +39,10 @@ struct Outcome {
 impl Fixes {
     pub fn checks(&self) -> &[Check] {
         &self.checks
+    }
+
+    pub fn repos(&self) -> Option<usize> {
+        self.repos
     }
 
     fn push(&mut self, message: String, undo: Option<Undo>, failed: bool) {
@@ -69,10 +75,12 @@ impl Dashboard {
             cx,
             || {
                 let cfg = Config::load().unwrap_or_default();
-                doctor::setup(&cfg, &worktrees(&cfg.roots()))
+                let wts = worktrees(&cfg.roots());
+                (doctor::setup(&cfg, &wts), wts.iter().filter(|w| w.main).count())
             },
-            |d, checks, _| {
+            |d, (checks, repos), _| {
                 d.fixes.checks = checks;
+                d.fixes.repos = Some(repos);
                 d.fixes.loaded = true;
                 // A confirmation for a check that no longer exists is stale.
                 if let Some((t, _)) = &d.fixes.confirm
@@ -126,7 +134,10 @@ impl Dashboard {
             |d, res, cx| {
                 d.fixes.busy = None;
                 match res {
-                    Ok(Done { message, undo }) => d.fixes.push(message, undo, false),
+                    Ok(Done { message, undo }) => {
+                        d.fixes.push(message, undo, false);
+                        d.settle();
+                    }
                     Err(e) => d.fixes.push(format!("Couldn't apply: {e:#}"), None, true),
                 }
                 d.refresh_checks(cx);
@@ -147,7 +158,10 @@ impl Dashboard {
                 // The row now says what's true: undone, or still applied.
                 if let Some(row) = d.fixes.results.iter_mut().find(|r| r.id == id) {
                     match res {
-                        Ok(m) => row.message = m,
+                        Ok(m) => {
+                            row.message = m;
+                            d.settle_until = None;
+                        }
                         Err(e) => {
                             row.message = format!("Couldn't undo: {e:#}");
                             row.failed = true;
@@ -198,7 +212,12 @@ impl Dashboard {
                     .items_center()
                     .gap_3()
                     .child(
-                        div().flex_1().text_sm().text_color(if r.failed { BAD } else { GOOD }).child(r.message.clone()),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .text_color(if r.failed { BAD } else { GOOD })
+                            .child(r.message.clone()),
                     )
                     .children(r.undo.is_some().then(|| {
                         button(("undo", id), "Undo", TRACK)
@@ -236,9 +255,10 @@ impl Dashboard {
                 text = text.child(div().text_xs().text_color(GOOD).child(format!("→ {}", c.fix)));
                 div()
             }
-            Some(_) if f.busy.as_deref() == Some(c.title.as_str()) => {
-                div().child(div().px_3().py_1().text_sm().text_color(MUTED).child("Working…"))
-            }
+            Some(_) if f.busy.as_deref() == Some(c.title.as_str()) => div().child(crate::summary::pulse(
+                div().px_3().py_1().text_sm().text_color(MUTED).child("Working…"),
+                "working",
+            )),
             Some(a) => {
                 let title = c.title.clone();
                 let click = cx.listener(move |this, _ev, _window, cx| this.click_fix(title.clone(), cx));
