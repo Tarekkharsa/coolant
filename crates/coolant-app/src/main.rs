@@ -154,8 +154,25 @@ impl Dashboard {
                 None => {
                     let confirming = self.confirm.as_deref() == Some(st.key.as_str());
                     let key = st.key.clone();
+                    let keep_key = st.key.clone();
                     let label = if confirming { "Confirm stop" } else { "Stop" };
-                    div()
+                    let keep = st.root.is_some().then(|| {
+                        fixes::button(("keep", i), "Keep running", TRACK).on_click(cx.listener(
+                            move |this, _ev, _window, cx| {
+                                if let Some(st) = this.stacks.iter_mut().find(|s| s.key == keep_key) {
+                                    this.status = Some(match stacks::keep(st) {
+                                        Ok(()) => {
+                                            st.locked = Some("kept");
+                                            format!("Keeping {}: it won't be reported again", st.key).into()
+                                        }
+                                        Err(e) => format!("Couldn't keep {}: {e}", st.key).into(),
+                                    });
+                                }
+                                cx.notify();
+                            },
+                        ))
+                    });
+                    let stop = div()
                         .id(("stop", i))
                         .px_3()
                         .py_1()
@@ -179,8 +196,8 @@ impl Dashboard {
                                 this.confirm = Some(key.clone());
                             }
                             cx.notify();
-                        }))
-                        .into_any_element()
+                        }));
+                    div().flex().gap_2().children(keep).child(stop).into_any_element()
                 }
             };
             body = body.child(
@@ -223,8 +240,13 @@ fn start_sampler(shared: Arc<Mutex<Option<Update>>>) -> Result<(), String> {
         .name("coolant-sampler".into())
         .spawn(move || {
             let mut stacks_at: Option<Instant> = None;
+            let mut taken = 0u32;
             loop {
-                std::thread::sleep(Duration::from_millis(SAMPLE_MS.load(Ordering::Relaxed)));
+                // The first samples come a second apart so the window has
+                // something to show right away; then the calm interval.
+                let ms = if taken < 2 { SAMPLE_LIVE } else { SAMPLE_MS.load(Ordering::Relaxed) };
+                taken += 1;
+                std::thread::sleep(Duration::from_millis(ms));
                 if !session.sample() {
                     continue;
                 }

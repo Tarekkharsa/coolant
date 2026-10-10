@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 pub struct Stack {
     /// Display label and identity: the project folder.
     pub key: String,
+    /// The project folder, when the processes' working directory is known.
+    pub root: Option<PathBuf>,
     pub procs: Vec<StackProc>,
     pub cpu_s: f64,
     pub rss_bytes: u64,
@@ -47,6 +49,7 @@ pub fn stacks(run: &Run) -> Vec<Stack> {
         let key = root.as_deref().map(tilde).unwrap_or_else(|| o.name.clone());
         let s = groups.entry(key.clone()).or_insert_with(|| Stack {
             key,
+            root: root.clone(),
             procs: Vec::new(),
             cpu_s: 0.0,
             rss_bytes: 0,
@@ -64,6 +67,19 @@ pub fn stacks(run: &Run) -> Vec<Stack> {
     let mut v: Vec<Stack> = groups.into_values().collect();
     v.sort_by(|a, b| b.cpu_s.total_cmp(&a.cpu_s));
     v
+}
+
+/// Adds the stack's project to the protected paths (like `coolant protect`),
+/// so its processes are kept and no longer reported as leftovers.
+pub fn keep(stack: &Stack) -> Result<(), String> {
+    let root = stack.root.as_deref().ok_or("its folder is unknown")?;
+    let mut cfg = Config::load().map_err(|e| e.to_string())?;
+    let p = tilde(&coolant_workspace::config::canonical(root));
+    if !cfg.protect.contains(&p) {
+        cfg.protect.push(p);
+        cfg.save().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// The nearest folder holding a `.git` (file or directory).

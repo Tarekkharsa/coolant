@@ -162,12 +162,21 @@ impl Dashboard {
     }
 
     /// One step of a screenshot script: `fix:<title prefix>` clicks that
-    /// check's button (twice confirms), `undo` clicks the newest Undo.
+    /// check's button (twice confirms), `undo` clicks the newest Undo,
+    /// `keep` keeps the first leftover group.
     pub fn script_step(&mut self, step: &str, cx: &mut Context<Self>) {
         if let Some(prefix) = step.strip_prefix("fix:") {
             if let Some(title) = self.fixes.checks.iter().find(|c| c.title.starts_with(prefix)).map(|c| c.title.clone())
             {
                 self.click_fix(title, cx);
+            }
+        } else if step == "keep" {
+            // Keeps the first leftover group that can be kept.
+            if let Some(st) = self.stacks.iter_mut().find(|s| s.locked.is_none() && s.root.is_some())
+                && crate::stacks::keep(st).is_ok()
+            {
+                st.locked = Some("kept");
+                cx.notify();
             }
         } else if step == "undo"
             && let Some(id) = self.fixes.results.iter().find(|r| r.undo.is_some()).map(|r| r.id)
