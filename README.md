@@ -115,8 +115,8 @@ Coolant is for everyone who runs agents, not only people at home in a terminal:
 - **Leftovers.** Dev servers that outlived their agent, grouped by project,
   with a two-step Stop.
 
-It only redraws when new data arrives and uses about 1% of one core (Mac mini
-M4; sampling every process once a second is most of it). Built with
+It only redraws when new data arrives and uses about 1% of one core (measured
+on a Mac mini M4). Built with
 [GPUI](https://gpui.rs), Zed's GPU UI framework.
 
 ```sh
