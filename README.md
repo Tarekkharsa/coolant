@@ -10,6 +10,7 @@ themselves. It's work the OS and your tooling do *in reaction* to them:
 - **Security checks** (`syspolicyd`, XProtect, `amfid`, EDR) on fresh binaries and thousands of short-lived processes
 - **Cold builds**: every new worktree starts without `target/` or `node_modules`, so the first build redoes everything
 - **Leftovers**: dev servers and watchers still running after the agent that started them finished
+- **Crash loops**: a service that crashes and restarts keeps `ReportCrash` busy writing crash reports
 - **Duplicated tooling**: one `tsserver` per worktree, file watchers on the same trees
 
 coolant **measures** this, attributing CPU, disk I/O, process spawns,
@@ -104,7 +105,8 @@ processes that serve ports exposed through Tailscale Serve/Funnel.
 Coolant is for everyone who runs agents, not only people at home in a terminal:
 - **Fixes, one click each.** It finds the git worktrees your agents create,
   whichever tool made them, and offers the fixes above as buttons: exclude from
-  Spotlight, exclude from Time Machine, prewarm, clean up. Each one explains
+  Spotlight, exclude from Time Machine, prewarm, clean up, and stopping a
+  Homebrew service that keeps crashing. Each one explains
   what it will do before it does it, and Spotlight and Time Machine changes
   have an Undo.
 - **Menu bar.** The CPU temperature sits in the menu bar, and the menu says

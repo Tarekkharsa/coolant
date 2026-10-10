@@ -89,6 +89,12 @@ servers, Caddy gateways) left running by earlier agent sessions in worktrees,
 some for 5 days. Separately, Docker Desktop's VM used up to 1.9 cores. Neither
 showed up as "agent" activity, but both heated the machine all day.
 
+Crash loops are a quieter version of the same problem. On the M1, three
+Homebrew services (`php-fpm`, `mysqld`, `watchman`) kept crashing and being
+restarted, and `ReportCrash` spent 20 CPU-s writing their crash reports during
+a five-minute benchmark. `coolant doctor` now flags any program with 10 or
+more crashes in a day and, for a Homebrew service, offers `brew services stop`.
+
 **Fix:** `coolant doctor` lists them grouped by project; `coolant-app` can stop
 a group after confirmation. Processes serving ports exposed through Tailscale
 Serve/Funnel, and paths you `coolant protect`, are never offered for stopping.

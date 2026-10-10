@@ -48,6 +48,8 @@ pub enum Action {
     Prewarm { worktrees: Vec<PathBuf>, repos: Vec<PathBuf> },
     /// Delete build artifacts in idle or merged worktrees with [`crate::sweep`].
     Sweep,
+    /// `brew services stop` a crash-looping Homebrew service.
+    StopService { formula: String },
 }
 
 fn check(status: Status, title: impl Into<String>, detail: impl Into<String>, fix: impl Into<String>) -> Check {
@@ -88,6 +90,7 @@ pub fn setup(cfg: &Config, worktrees: &[Worktree]) -> Vec<Check> {
     icloud(cfg, &mut out);
     stale(cfg, &linked, &mut out);
     prewarm(&linked, worktrees, &mut out);
+    crash_loops(&mut out);
     out
 }
 
@@ -232,6 +235,57 @@ fn prewarm(linked: &[&Worktree], all: &[Worktree], out: &mut Vec<Check>) {
             .with(Action::Prewarm { worktrees: cold, repos }),
         );
     }
+}
+
+/// Programs that keep crashing; at most three, most crashes first.
+fn crash_loops(out: &mut Vec<Check>) {
+    let loaded = loaded_jobs();
+    for c in crate::crashes::recent().into_iter().take(3) {
+        let ago = c.last.elapsed().unwrap_or_default().as_secs();
+        let ago = if ago < 3600 { format!("{} min", ago / 60) } else { format!("{} h", ago / 3600) };
+        let reason = if c.reason.is_empty() { String::new() } else { format!(" ({})", c.reason) };
+        let title = format!("{} crashed {} times in the last 24 hours", c.name, c.count);
+        let detail = format!(
+            "Each crash makes ReportCrash write a report, often seconds of CPU each, and a service that restarts crashes again. Last crash {ago} ago{reason}."
+        );
+        let check = match (&c.label, c.brew_formula()) {
+            // Stopped since (only this user's launchd jobs are listed, so a
+            // root service started with `sudo brew services` lands here too).
+            (Some(label), _) if !loaded.contains(label) => continue,
+            (Some(_), Some(f)) => check(
+                Status::Warn,
+                title,
+                detail,
+                format!("brew services stop {f}   (start it again with brew services start {f})"),
+            )
+            .with(Action::StopService { formula: f.to_string() }),
+            (Some(label), None) => check(
+                Status::Warn,
+                title,
+                detail,
+                // SAFETY: getuid has no preconditions.
+                format!("Fix what makes it crash, or stop it: launchctl bootout gui/{}/{label}", unsafe {
+                    libc::getuid()
+                }),
+            ),
+            (None, _) if c.system => {
+                check(Status::Info, title, detail, "This is part of macOS; restarting the Mac usually clears it.")
+            }
+            (None, _) => check(Status::Warn, title, detail, format!("Fix or stop whatever keeps starting {}.", c.name)),
+        };
+        out.push(check);
+    }
+}
+
+/// Labels of the current user's launchd jobs.
+fn loaded_jobs() -> std::collections::BTreeSet<String> {
+    let Ok(out) = Command::new("launchctl").arg("list").output() else { return Default::default() };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .skip(1)
+        .filter_map(|l| l.split('\t').nth(2))
+        .map(str::to_string)
+        .collect()
 }
 
 fn processes(cfg: &Config, sample: Duration, out: &mut Vec<Check>) {

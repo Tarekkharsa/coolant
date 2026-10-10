@@ -288,6 +288,7 @@ fn button_label(a: &Action) -> &'static str {
         Action::ExcludeFromBackups { .. } => "Exclude from Time Machine",
         Action::Prewarm { .. } => "Prewarm",
         Action::Sweep => "Clean up",
+        Action::StopService { .. } => "Stop service",
     }
 }
 
@@ -297,6 +298,7 @@ fn confirm_label(a: &Action) -> String {
         Action::ExcludeFromBackups { .. } => "Exclude".into(),
         Action::Prewarm { worktrees, .. } => format!("Prewarm {} worktree(s)", worktrees.len()),
         Action::Sweep => "Delete".into(),
+        Action::StopService { formula } => format!("Stop {formula}"),
     }
 }
 
@@ -307,5 +309,6 @@ fn explain(a: &Action) -> String {
         Action::ExcludeFromBackups { .. } => "Time Machine stops backing up this folder. Undo turns backups back on.".into(),
         Action::Prewarm { .. } => "Clones target/, node_modules and similar from the main checkout with copy-on-write (no extra disk), and adds a git hook so new worktrees get the same.".into(),
         Action::Sweep => "Deletes build folders (target/, node_modules, …) in worktrees idle for 7+ days or already merged. Your code and branches stay; a rebuild recreates them.".into(),
+        Action::StopService { formula } => format!("Runs brew services stop {formula}: the service stops and won't start at login. It keeps crashing, so it isn't working anyway. Undo starts it again."),
     }
 }

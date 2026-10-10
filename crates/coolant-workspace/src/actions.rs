@@ -8,6 +8,7 @@ use crate::fsutil::human;
 use crate::{prewarm, sweep, tune, worktrees};
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Worktrees idle this many days are swept (the CLI's default).
 const SWEEP_IDLE_DAYS: f64 = 7.0;
@@ -23,6 +24,7 @@ pub struct Done {
 pub enum Undo {
     Tune(Vec<PathBuf>),
     ExcludeFromBackups(Vec<PathBuf>),
+    StartService(String),
 }
 
 /// Applies `action`. Partial success is reported in the message; an error
@@ -78,6 +80,13 @@ pub fn apply(cfg: &Config, action: &Action) -> Result<Done> {
             append_failures(&mut message, &failed);
             Ok(Done { message, undo: None })
         }
+        Action::StopService { formula } => {
+            brew(&["services", "stop", formula])?;
+            Ok(Done {
+                message: format!("Stopped {formula}; it won't start again at login."),
+                undo: Some(Undo::StartService(formula.clone())),
+            })
+        }
         Action::Sweep => {
             let plans = sweep_plan(cfg, false);
             let freed = sweep::apply(&plans)?;
@@ -101,6 +110,10 @@ pub fn undo(u: &Undo) -> Result<String> {
             }
             Ok(format!("Time Machine backs up {} folder(s) again.", paths.len()))
         }
+        Undo::StartService(formula) => {
+            brew(&["services", "start", formula])?;
+            Ok(format!("Started {formula} again."))
+        }
     }
 }
 
@@ -115,6 +128,18 @@ pub fn sweep_preview(cfg: &Config) -> (usize, u64) {
 fn sweep_plan(cfg: &Config, dry_run: bool) -> Vec<sweep::Plan> {
     let opts = sweep::Options { idle_days: SWEEP_IDLE_DAYS, remove_merged: false, dry_run };
     sweep::plan(cfg, worktrees(&cfg.roots()), &opts).0
+}
+
+/// Runs Homebrew, wherever it is installed.
+fn brew(args: &[&str]) -> Result<()> {
+    for bin in ["brew", "/opt/homebrew/bin/brew", "/usr/local/bin/brew"] {
+        let Ok(out) = Command::new(bin).args(args).output() else { continue };
+        if !out.status.success() {
+            bail!("brew {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
+        }
+        return Ok(());
+    }
+    bail!("Homebrew not found")
 }
 
 fn append_failures(message: &mut String, failed: &[String]) {
