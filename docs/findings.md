@@ -3,7 +3,9 @@
 Measured on a Mac mini M4 (10 cores, 16 GB, macOS 27.0.1) in October 2026,
 with coolant's own profiler and benchmarks. Raw results are in
 [`results/`](results/). These are single-machine numbers. Treat the ratios as
-the finding and the absolute values as illustrative.
+the finding and the absolute values as illustrative. A Quick-preset run on a
+MacBook Pro M1 (8 cores, 8 GB, fanless, macOS 26.5.2) is noted below where it
+differs.
 
 ## 1. Spotlight is the biggest hidden cost, and it's invisible to the agent
 
@@ -37,6 +39,9 @@ The workloads themselves took only 1–14% longer in the indexed folder, because
 `mds_stores` and `mdworker_shared` do their work *after* the files are
 written. An agent never sees it; the CPU, power draw and fan do.
 
+The gap held on the M1: 16.3 vs 1.6 CPU-s for `cp -R`, 11.2 vs 1.1 for
+clonefile, and 15.3 vs 2.8 for git with 2 agents.
+
 **Fix:** keep agent worktrees out of Spotlight with `coolant tune <folder>`.
 It moves the folder into `~/.coolant/spaces.noindex/` and symlinks it back.
 Spotlight doesn't follow symlinks, so files written through the old path aren't
@@ -50,6 +55,11 @@ Running a newly built, ad-hoc-signed binary for the first time took
 with the extra time spent in `syspolicyd`. Every `cargo build` / `cargo test`
 produces new binaries, so Rust agents iterating on tests pay this again and
 again.
+
+On the M1 the tax was heavier: about 1.9 CPU-s in security daemons per 10 new
+binaries (M4: 0.4). With 2 agents running new binaries at once, first runs took
+about 830 ms and throughput barely improved over 1 agent (57% parallel
+efficiency, against 100% on the M4).
 
 ## 3. Cold worktrees rebuild everything
 
