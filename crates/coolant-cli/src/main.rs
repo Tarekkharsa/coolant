@@ -109,6 +109,15 @@ enum Cmd {
         #[arg(short, long)]
         yes: bool,
     },
+    /// List projects, or switch which ones Coolant may change
+    #[cfg(unix)]
+    Projects {
+        /// on or off: switch these projects; all: every project, also future ones
+        #[arg(value_parser = ["on", "off", "all"])]
+        switch: Option<String>,
+        /// Project folders (any folder inside a project works)
+        paths: Vec<PathBuf>,
+    },
     /// Protect paths from tune, sweep and process actions
     #[cfg(unix)]
     Protect {
@@ -149,6 +158,8 @@ fn main() -> Result<()> {
         Cmd::Sweep { days, remove_merged, yes } => workspace::sweep(days, remove_merged, yes),
         #[cfg(unix)]
         Cmd::Protect { paths, remove } => workspace::protect(paths, remove),
+        #[cfg(unix)]
+        Cmd::Projects { switch, paths } => workspace::projects(switch.as_deref(), paths),
     }
 }
 

@@ -35,6 +35,8 @@ pub struct Plan {
 pub struct Skipped {
     pub in_use: Vec<(PathBuf, Vec<i32>)>,
     pub protected: Vec<PathBuf>,
+    /// Worktrees of projects that are switched off.
+    pub off: usize,
 }
 
 /// Decides what to clean, without touching anything.
@@ -52,6 +54,10 @@ pub fn plan(cfg: &Config, worktrees: Vec<Worktree>, opts: &Options) -> (Vec<Plan
             (false, true) => format!("idle for {idle:.0} days"),
             _ => continue,
         };
+        if !cfg.manages_repo(&wt.repo) {
+            skipped.off += 1;
+            continue;
+        }
         if cfg.is_protected(&wt.path) {
             skipped.protected.push(wt.path);
             continue;
@@ -123,6 +129,9 @@ pub fn describe(plans: &[Plan], skipped: &Skipped, dry_run: bool) -> String {
     }
     for (path, pids) in &skipped.in_use {
         let _ = writeln!(w, "skipped {} (in use by pids {pids:?})", tilde(path));
+    }
+    if skipped.off > 0 {
+        let _ = writeln!(w, "skipped {} worktree(s) of projects that are switched off (coolant projects)", skipped.off);
     }
     for path in &skipped.protected {
         let _ = writeln!(w, "skipped {} (protected)", tilde(path));

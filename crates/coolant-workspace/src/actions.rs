@@ -91,13 +91,14 @@ pub fn apply(cfg: &Config, action: &Action) -> Result<Done> {
         }
         Action::StopProcesses { procs } => {
             // Re-check every process: still the same program, and not one
-            // serving a port shared through Tailscale or in a protected path.
+            // serving a port shared through Tailscale, in a protected path or
+            // in a project that is switched off.
             let inuse = crate::inuse::InUse::scan();
             let exposed = crate::exposed::exposed_pids();
             let mut stopped = 0;
             for (pid, command) in procs {
                 let same = inuse.command(*pid) == Some(command.as_str());
-                let protected = inuse.cwd(*pid).is_some_and(|c| cfg.is_protected(c));
+                let protected = !cfg.may_touch_cwd(inuse.cwd(*pid));
                 // SAFETY: kill(2) with a plain signal has no memory-safety concerns.
                 if same && !protected && !exposed.contains(pid) && unsafe { libc::kill(*pid, libc::SIGTERM) } == 0 {
                     stopped += 1;

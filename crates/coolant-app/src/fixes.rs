@@ -25,8 +25,17 @@ pub struct Fixes {
     confirm: Option<(String, String)>,
     results: Vec<Outcome>,
     next_id: usize,
-    /// Repositories found by the last check, once it has run.
-    repos: Option<usize>,
+    /// Projects found by the last check, once it has run.
+    projects: Option<Vec<Project>>,
+}
+
+/// A git project (main checkout) and whether Coolant looks after it.
+#[derive(Debug, Clone)]
+pub struct Project {
+    pub repo: std::path::PathBuf,
+    pub on: bool,
+    /// Its agent and other linked worktrees.
+    pub worktrees: usize,
 }
 
 struct Outcome {
@@ -41,8 +50,8 @@ impl Fixes {
         &self.checks
     }
 
-    pub fn repos(&self) -> Option<usize> {
-        self.repos
+    pub fn projects(&self) -> Option<&[Project]> {
+        self.projects.as_deref()
     }
 
     fn push(&mut self, message: String, undo: Option<Undo>, failed: bool) {
@@ -76,11 +85,22 @@ impl Dashboard {
             || {
                 let cfg = Config::load().unwrap_or_default();
                 let wts = worktrees(&cfg.roots());
-                (doctor::setup(&cfg, &wts), wts.iter().filter(|w| w.main).count())
+                let mut projects: Vec<Project> = wts
+                    .iter()
+                    .filter(|w| w.main)
+                    .map(|m| Project {
+                        repo: m.path.clone(),
+                        on: cfg.manages_repo(&m.path),
+                        worktrees: wts.iter().filter(|w| !w.main && w.repo == m.path).count(),
+                    })
+                    .collect();
+                // Switched on first, then busiest.
+                projects.sort_by_key(|p| (!p.on, std::cmp::Reverse(p.worktrees), p.repo.clone()));
+                (doctor::setup(&cfg, &wts), projects)
             },
-            |d, (checks, repos), _| {
+            |d, (checks, projects), _| {
                 d.fixes.checks = checks;
-                d.fixes.repos = Some(repos);
+                d.fixes.projects = Some(projects);
                 d.fixes.loaded = true;
                 // A confirmation for a check that no longer exists is stale.
                 if let Some((t, _)) = &d.fixes.confirm
@@ -90,6 +110,21 @@ impl Dashboard {
                 }
             },
         );
+    }
+
+    /// Switches a project on or off, then checks again.
+    pub fn set_project(&mut self, repo: &std::path::Path, on: bool, cx: &mut Context<Self>) {
+        let Ok(mut cfg) = Config::load() else { return };
+        cfg.set_managed(repo, on);
+        if cfg.save().is_err() {
+            return;
+        }
+        if let Some(p) = self.fixes.projects.iter_mut().flatten().find(|p| p.repo == repo) {
+            p.on = on;
+        }
+        self.fixes.confirm = None;
+        self.refresh_checks(cx);
+        cx.notify();
     }
 
     fn click_fix(&mut self, title: String, cx: &mut Context<Self>) {

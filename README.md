@@ -81,6 +81,8 @@ coolant prewarm path/to/worktree            # clone target/, node_modules … fr
 coolant prewarm --install-hook ~/code/app   # …automatically for every new worktree
 coolant sweep                               # list build artifacts in idle/merged worktrees
 coolant sweep --yes                         # …and delete them
+coolant projects                            # which projects coolant may change
+coolant projects on ~/code/app              # …switch one on (off, or all)
 coolant protect ~/demo                      # never touch this path
 ```
 
@@ -101,6 +103,11 @@ coolant protect ~/demo                      # never touch this path
   `node_modules`, `.next`, `.turbo`, …) in linked worktrees that are idle or
   merged. It never touches main checkouts, and only removes whole worktrees with
   `--remove-merged` (git refuses if there are local changes).
+
+**Projects:** the app starts with every project switched off; `coolant
+projects on <folder>` (or the app's Settings) switches one on, and every fix,
+in the app and on the command line, then leaves the others alone. Without a
+list (command line only, never opened the app) every project counts as on.
 
 **Safety rules everywhere:** dry runs by default where it matters; never touch
 protected paths; never touch folders a running process uses; never stop
@@ -123,8 +130,9 @@ panel; right-click for Details, Launch at Login, Check for Updates and Quit.
 - **Details** opens the full dashboard in its own window: temperature, power,
   busy cores and fan; where the CPU is going; agent sessions, top processes,
   and leftover dev servers grouped by project (Stop, or Keep running).
-- **Settings** (the gear): the folders Coolant watches, with *Add folder…*;
-  projects you keep running; Launch at login; updates.
+- **Settings** (the gear): an On/Off switch for each project; the folders
+  Coolant looks in, with *Add folder…*; projects you keep running; Launch at
+  login; updates.
 - **Updates** are checked once a day; *Update* downloads the new version,
   checks its SHA-256, replaces the app and restarts it.
 
@@ -132,11 +140,13 @@ panel; right-click for Details, Launch at Login, Check for Updates and Quit.
 
 Nothing changes on its own. Coolant looks for git projects in your usual code
 folders (`~/Documents/GitHub`, `~/Developer`, `~/code`, `~/src`, `~/projects`,
-`~/dev`, `~/work`, and projects directly in `~`; add others in Settings),
-finds every agent worktree inside them, whichever tool made it, and watches
-what's running. Problems show up under *Fix it*; nothing is moved, deleted or
-stopped until you click a fix and confirm it. There's no project or working
-directory to configure.
+`~/dev`, `~/work`, and projects directly in `~`; add others in Settings) and
+lists them, **all switched off**. Switch on the projects you want looked
+after: only those get fixes for their agent worktrees (whichever tool made
+them), build folders and dev servers. A project that is off is never
+touched, files or processes. Machine-wide problems (a crash-looping service,
+a stray `~/.git`) are still shown. Every fix waits for you to click it and
+confirm.
 
 <br clear="right">
 

@@ -128,6 +128,15 @@ impl Dashboard {
             hold: summary::Hold::default(),
             last_paint: Instant::now(),
         };
+        // New users choose which projects Coolant may change; until then it
+        // changes none. (The screenshot demo uses its own config.)
+        if !screenshot
+            && let Ok(mut cfg) = coolant_workspace::config::Config::load()
+            && cfg.projects.is_none()
+        {
+            cfg.projects = Some(Vec::new());
+            let _ = cfg.save();
+        }
         d.refresh_checks(cx);
         d
     }

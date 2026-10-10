@@ -232,6 +232,40 @@ impl Dashboard {
         if let Some(banner) = self.update_banner(cx) {
             body = body.child(banner);
         }
+        // Nothing is looked after yet: say so, and where to choose.
+        let projects = self.fixes.projects().unwrap_or_default();
+        let on = projects.iter().filter(|p| p.on).count();
+        if on == 0 && !projects.is_empty() {
+            body = body.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .rounded_lg()
+                    .bg(tint(ACCENT))
+                    .px_3()
+                    .py_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_0p5()
+                            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Choose your projects"))
+                            .child(div().text_xs().text_color(MUTED).child(format!(
+                                "Found {}. Coolant changes nothing in a project until you switch it on.",
+                                plural(projects.len(), "project")
+                            ))),
+                    )
+                    .child(crate::fixes::button(("choose", 0), "Choose", ACCENT).on_click(cx.listener(
+                        |this, _ev, _window, cx| {
+                            this.mode = PanelMode::Settings;
+                            cx.notify();
+                        },
+                    ))),
+            );
+        }
 
         // Fix it: results, open fixes, leftovers.
         let mut fixes = self.fix_rows(true, cx);
@@ -256,7 +290,7 @@ impl Dashboard {
         // Your setup: what's already fine.
         let mut ok: Vec<String> =
             self.fixes.checks().iter().filter(|c| c.status == CheckStatus::Ok).map(|c| c.title.clone()).collect();
-        if leftover.is_empty() && self.run.is_some() {
+        if leftover.is_empty() && self.run.is_some() && on > 0 {
             ok.push("No leftover dev servers".into());
         }
         if !ok.is_empty() {
@@ -265,9 +299,9 @@ impl Dashboard {
                 .children(ok.into_iter().map(|t| div().text_sm().text_color(GOOD).child(format!("✓ {t}"))));
         }
 
-        let watching = match self.fixes.repos() {
+        let watching = match self.fixes.projects() {
             None => "Looking for your projects…".to_string(),
-            Some(n) => format!("Watching {n} project(s)"),
+            Some(ps) => format!("Looking after {on} of {}", plural(ps.len(), "project")),
         };
         let footer = div()
             .mt_1()
@@ -331,13 +365,54 @@ impl Dashboard {
             .child(back)
             .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child("Settings"));
 
-        // Project folders.
-        let mut folders = div().flex().flex_col().gap_1().child(
+        // Projects, each switched on or off.
+        let mut projects = div().flex().flex_col().gap_1().child(
             div()
                 .text_xs()
                 .text_color(MUTED)
-                .child("Coolant finds git projects in these folders and checks the agent worktrees inside them, whichever tool made them. Nothing changes until you click a fix."),
+                .child("Coolant only changes projects you switch on: Spotlight and backups for their agent worktrees, build folders, and their dev servers. Projects that are off are never touched."),
         );
+        match self.fixes.projects() {
+            None => projects = projects.child(div().text_sm().text_color(MUTED).child("Looking for projects…")),
+            Some([]) => {
+                projects =
+                    projects.child(div().text_sm().text_color(MUTED).child("No git projects in the folders below."))
+            }
+            Some(ps) => {
+                for (i, p) in ps.iter().cloned().enumerate() {
+                    let name = p.repo.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let mut sub = coolant_workspace::config::tilde(p.repo.parent().unwrap_or(&p.repo));
+                    if p.worktrees > 0 {
+                        sub.push_str(&format!(" · {}", plural(p.worktrees, "agent worktree")));
+                    }
+                    let (label, bg) = if p.on { ("On", ACCENT) } else { ("Off", TRACK) };
+                    projects = projects.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .py_0p5()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(div().text_sm().child(name))
+                                    .child(div().text_xs().text_color(MUTED).child(sub)),
+                            )
+                            .child(crate::fixes::button(("project", i), label, bg).on_click(
+                                cx.listener(move |this, _ev, _window, cx| this.set_project(&p.repo, !p.on, cx)),
+                            )),
+                    );
+                }
+            }
+        }
+
+        // Where to look for projects.
+        let mut folders = div().flex().flex_col().gap_1().child(div().text_xs().text_color(MUTED).child(
+            "Coolant finds git projects in these folders, and the agent worktrees of each, whichever tool made them.",
+        ));
         for (i, f) in self.watched_folders().into_iter().enumerate() {
             let label = if f == coolant_workspace::config::home() {
                 "~ (top level only)".to_string()
@@ -432,7 +507,9 @@ impl Dashboard {
             .flex_col()
             .gap_3()
             .child(header)
-            .child(section("Project folders"))
+            .child(section("Projects"))
+            .child(projects)
+            .child(section("Where to look"))
             .child(folders)
             .child(section("Kept running"))
             .child(keep)
@@ -466,6 +543,11 @@ fn row(title: String, sub: String) -> gpui::Div {
 }
 
 /// A settings row: a label, and whatever controls are added with `.child`.
+/// "1 project", "3 projects".
+fn plural(n: usize, what: &str) -> String {
+    if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") }
+}
+
 fn list_row(label: String) -> gpui::Div {
     div().flex().items_center().gap_2().py_0p5().child(div().flex_1().min_w_0().text_sm().child(label))
 }

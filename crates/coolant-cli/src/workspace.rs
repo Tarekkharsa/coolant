@@ -1,7 +1,7 @@
 //! Commands of the workspace layer: doctor, tune, prewarm, sweep, protect.
 
 use anyhow::{Result, bail};
-use coolant_workspace::config::{Config, canonical, tilde};
+use coolant_workspace::config::{Config, canonical, project_of, tilde};
 use coolant_workspace::{doctor as doc, prewarm as pw, sweep as sw, tune as tn, worktrees};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -94,6 +94,40 @@ pub fn protect(paths: Vec<PathBuf>, remove: bool) -> Result<()> {
     }
     for p in &cfg.protect {
         println!("protected: {p}");
+    }
+    Ok(())
+}
+
+pub fn projects(switch: Option<&str>, paths: Vec<PathBuf>) -> Result<()> {
+    let mut cfg = Config::load()?;
+    match switch {
+        Some("all") => cfg.projects = None,
+        Some(s) => {
+            if paths.is_empty() {
+                bail!("which projects? e.g. coolant projects {s} ~/code/app");
+            }
+            for p in &paths {
+                let Some(repo) = project_of(p) else { bail!("{} isn't in a git project", p.display()) };
+                cfg.set_managed(&repo, s == "on");
+            }
+        }
+        None => {}
+    }
+    if switch.is_some() {
+        cfg.save()?;
+    }
+    let repos: Vec<PathBuf> = worktrees(&cfg.roots()).into_iter().filter(|w| w.main).map(|w| w.path).collect();
+    if cfg.projects.is_none() {
+        println!("Coolant may change every project (switch some on to limit it):\n");
+    }
+    for r in &repos {
+        println!("{:<4} {}", if cfg.manages_repo(r) { "on" } else { "off" }, tilde(r));
+    }
+    // Switched on but outside the folders Coolant searches.
+    for p in cfg.projects.iter().flatten() {
+        if !repos.iter().any(|r| tilde(r) == *p) {
+            println!("on   {p}   (not in a searched folder)");
+        }
     }
     Ok(())
 }

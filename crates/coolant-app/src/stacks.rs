@@ -3,7 +3,8 @@
 //! Orphans (dev servers and watchers whose parent session is gone) are
 //! grouped by the git project their working directory belongs to. Groups
 //! inside a protected path, or serving a port Tailscale exposes to other
-//! people, are shown locked and can't be stopped from here.
+//! people, are shown locked and can't be stopped from here. Ones in projects
+//! that are switched off aren't shown at all.
 
 use coolant_core::profile::Run;
 use coolant_workspace::config::{Config, tilde};
@@ -43,6 +44,10 @@ pub fn stacks(run: &Run) -> Vec<Stack> {
     let mut groups: BTreeMap<String, Stack> = BTreeMap::new();
     for o in &run.orphans {
         let cwd = inuse.cwd(o.pid).map(Path::to_path_buf);
+        let protected = cwd.as_deref().is_some_and(|c| cfg.is_protected(c));
+        if !protected && !cfg.may_touch_cwd(cwd.as_deref()) {
+            continue;
+        }
         // Group by protected path first (it may not be a git project), then
         // by the git project the process runs in.
         let root = cwd.as_deref().map(|c| cfg.protected_root(c).unwrap_or_else(|| project_root(c)));
@@ -55,7 +60,7 @@ pub fn stacks(run: &Run) -> Vec<Stack> {
             rss_bytes: 0,
             locked: None,
         });
-        if cwd.as_deref().is_some_and(|c| cfg.is_protected(c)) {
+        if protected {
             s.locked = Some("protected");
         } else if exposed.contains(&o.pid) && s.locked.is_none() {
             s.locked = Some("exposed via Tailscale");
@@ -98,7 +103,7 @@ pub fn stop(stack: &Stack) -> Result<usize, String> {
     let exposed = exposed_pids();
     let mut stopped = 0;
     for p in &stack.procs {
-        let locked = exposed.contains(&p.pid) || inuse.cwd(p.pid).is_some_and(|c| cfg.is_protected(c));
+        let locked = exposed.contains(&p.pid) || !cfg.may_touch_cwd(inuse.cwd(p.pid));
         // The PID must still be the same program, not a reused number.
         let same = inuse.command(p.pid).is_some_and(|c| c.contains(&p.name));
         if locked || !same {

@@ -85,17 +85,21 @@ pub fn run(cfg: &Config, worktrees: &[Worktree], sample: Duration) -> Vec<Check>
 /// watches those itself).
 pub fn setup(cfg: &Config, worktrees: &[Worktree]) -> Vec<Check> {
     let mut out = Vec::new();
+    // Only projects that are switched on get folder checks.
+    let all = worktrees.iter().filter(|w| w.main).count();
+    let worktrees: Vec<Worktree> = worktrees.iter().filter(|w| cfg.manages_repo(&w.repo)).cloned().collect();
+    let worktrees = &worktrees[..];
     let linked: Vec<&Worktree> = worktrees.iter().filter(|w| !w.main).collect();
-    out.push(check(
-        Status::Info,
-        format!(
-            "{} repositories, {} agent/linked worktrees",
-            worktrees.iter().filter(|w| w.main).count(),
-            linked.len()
+    let on = worktrees.iter().filter(|w| w.main).count();
+    out.push(match cfg.projects {
+        None => check(Status::Info, format!("{all} repositories, {} agent/linked worktrees", linked.len()), "", ""),
+        Some(_) => check(
+            Status::Info,
+            format!("Looking after {on} of {all} projects, {} agent/linked worktrees", linked.len()),
+            "Projects that are switched off are never changed. Switch them in the app's Settings, or with coolant projects on|off <folder>.",
+            "",
         ),
-        "",
-        "",
-    ));
+    });
     moved_earlier(&mut out);
     spotlight(&linked, &mut out);
     time_machine(&linked, &mut out);
@@ -223,7 +227,7 @@ fn duplicate_servers(cfg: &Config, procs: &[coolant_platform::Process], out: &mu
     let inuse = crate::inuse::InUse::scan();
     let exposed = crate::exposed::exposed_pids();
     let mut dups = crate::host::duplicate_servers(procs, |pid| inuse.cwd(pid).map(Path::to_path_buf));
-    dups.retain(|d| !cfg.is_protected(&d.dir));
+    dups.retain(|d| cfg.may_touch(&d.dir));
     for d in &mut dups {
         d.extra.retain(|(pid, _)| !exposed.contains(pid));
     }
@@ -533,7 +537,7 @@ fn orphans(cfg: &Config, run: &Run, out: &mut Vec<Check>) {
     let (mut n, mut shared) = (0, 0);
     for o in &run.orphans {
         let cwd = inuse.cwd(o.pid).map(Path::to_path_buf);
-        let protected = cwd.as_deref().is_some_and(|c| cfg.is_protected(c))
+        let protected = !cfg.may_touch_cwd(cwd.as_deref())
             || cfg.protect.iter().any(|p| o.command.contains(&*crate::config::expand(p).to_string_lossy()));
         if protected {
             continue;
