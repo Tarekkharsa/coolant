@@ -44,7 +44,13 @@ mkdir -p "$dest"
 # Replace a running copy cleanly.
 if pgrep -f "Coolant.app/Contents/MacOS/coolant-app" >/dev/null 2>&1; then
   osascript -e 'quit app "Coolant"' >/dev/null 2>&1 || true
-  sleep 1
+  # Wait until it has exited, or the new copy's `open` goes to the old one.
+  i=0
+  while pgrep -f "Coolant.app/Contents/MacOS/coolant-app" >/dev/null 2>&1 && [ $i -lt 20 ]; do
+    sleep 0.25
+    i=$((i + 1))
+  done
+  pkill -f "Coolant.app/Contents/MacOS/coolant-app" >/dev/null 2>&1 || true
 fi
 
 mkdir "$tmp/mnt"
