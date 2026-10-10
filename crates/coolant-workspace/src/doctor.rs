@@ -102,9 +102,10 @@ pub fn setup(cfg: &Config, worktrees: &[Worktree]) -> Vec<Check> {
 }
 
 /// Median `/usr/bin/true` start-to-exit time above which program starts
-/// count as slow (unmanaged Apple Silicon Macs measure about 0.7–1.5 ms; a
-/// MacBook Pro with CrowdStrike Falcon measured 3.7 ms).
-const SLOW_EXEC_MS: f64 = 2.5;
+/// count as slow. Unmanaged Apple Silicon Macs measure about 0.8–1.5 ms;
+/// a MacBook Pro with CrowdStrike Falcon measured 2.8 ms here (4.0 ms in
+/// the benchmark), so 2.5 ms would sit too close to it.
+const SLOW_EXEC_MS: f64 = 2.0;
 
 fn endpoint_security(out: &mut Vec<Check>) {
     if !cfg!(target_os = "macos") {
