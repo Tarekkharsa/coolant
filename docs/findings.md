@@ -4,8 +4,9 @@ Measured on a Mac mini M4 (10 cores, 16 GB, macOS 27.0.1) in October 2026,
 with coolant's own profiler and benchmarks. Raw results are in
 [`results/`](results/). These are single-machine numbers. Treat the ratios as
 the finding and the absolute values as illustrative. A Quick-preset run on a
-MacBook Pro 13" M1 (8 cores, 8 GB, macOS 26.5.2) is noted below where it
-differs.
+MacBook Pro 13" M1 (8 cores, 8 GB, macOS 26.5.2) and one on a company-managed
+MacBook Pro 14" M2 Pro (10 cores, 16 GB, macOS 27.0, CrowdStrike Falcon) are
+noted below where they differ.
 
 ## 1. Spotlight is the biggest hidden cost, and it's invisible to the agent
 
@@ -40,7 +41,8 @@ The workloads themselves took only 1–14% longer in the indexed folder, because
 written. An agent never sees it; the CPU, power draw and fan do.
 
 The gap held on the M1: 16.3 vs 1.6 CPU-s for `cp -R`, 11.2 vs 1.1 for
-clonefile, and 15.3 vs 2.8 for git with 2 agents.
+clonefile, and 15.3 vs 2.8 for git with 2 agents. On the M2 Pro: 14.1 vs 1.6,
+12.1 vs 0.8, and 19.2 vs 3.1.
 
 **Fix:** keep agent worktrees out of Spotlight with `coolant tune <folder>`.
 It moves the folder into `~/.coolant/spaces.noindex/` and symlinks it back.
@@ -62,6 +64,9 @@ about 830 ms and throughput barely improved over 1 agent (57% parallel
 efficiency, against 100% on the M4). The two machines also run different macOS
 versions (26.5 vs 27), and the security scanners change between releases, so
 part of the difference may be the OS rather than the chip.
+
+On the M2 Pro, first runs took 870–920 ms and later runs 7 ms. See finding 6
+for why.
 
 ## 3. Cold worktrees rebuild everything
 
@@ -104,6 +109,29 @@ Serve/Funnel, and paths you `coolant protect`, are never offered for stopping.
 `coolant sweep` found a merged agent worktree still holding 2 GB of
 `node_modules`. Sweep removes artifact folders from idle or merged linked
 worktrees that no process is using, as a dry run unless `--yes` is passed.
+
+## 6. Endpoint security agents slow down every process and file
+
+The M2 Pro runs CrowdStrike Falcon, which company-managed Macs often have. It
+was slower than the M1 and the M4 at everything that starts a process or
+touches a file, although it runs macOS 27 like the M4:
+
+| Quick preset, 1 agent, `.noindex` | M2 Pro + Falcon | M1 | M4 |
+|---|---|---|---|
+| `/usr/bin/true` execs per second | 264 | 1,011 | 1,507 |
+| warm exec of a new binary | 7.1 ms | 1.5 ms | 2.0 ms |
+| first exec of a new binary | 870 ms | 461 ms | 449 ms |
+| copy a 3,000-file tree (`cp -R`) | 2.3 s | 1.0 s | 0.6 s |
+| git workload, commands per second | 9 | 13 | 21 |
+
+The extra CPU lands in the agent's own processes (the copy itself used 1.8
+CPU-s, against 0.9 on the M1), because Endpoint Security makes each exec and
+file open wait for Falcon's verdict. Falcon's own processes report 0:00 CPU
+time to `ps`, so coolant can't attribute the cost to them. We could not turn
+Falcon off to confirm it is the cause. Agents spawn thousands of short
+processes (`git`, `rg`, `node`, compilers), so on a machine like this every
+tool call costs more. There is nothing to fix from user space; prewarming and
+fewer cold builds help more here than on an unmanaged Mac.
 
 ## Method notes
 
