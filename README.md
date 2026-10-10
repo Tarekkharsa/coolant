@@ -102,25 +102,35 @@ processes that serve ports exposed through Tailscale Serve/Funnel.
 
 ## The Mac app
 
-![Coolant app](docs/img/dashboard.png)
+<img src="docs/img/panel.png" alt="Coolant status panel" width="330" align="right">
 
-Coolant is for everyone who runs agents, not only people at home in a terminal:
-- **Fixes, one click each.** It finds the git worktrees your agents create,
-  whichever tool made them, and offers the fixes above as buttons: exclude from
-  Spotlight, exclude from Time Machine, prewarm, clean up, stop the extra
-  copies of a dev server, and stop a Homebrew service that keeps crashing. Each one explains
-  what it will do before it does it, and Spotlight and Time Machine changes
-  have an Undo.
-- **Menu bar.** The CPU temperature sits in the menu bar, and the menu says
-  what's heating the machine right now ("Spotlight indexing is using 1.9
-  cores"). Closing the window keeps Coolant running there.
-- **Live dashboard.** Temperature, power, busy cores and fan; where the CPU
-  is going, with OS overhead in orange; agent sessions and top processes.
-- **Leftovers.** Dev servers that outlived their agent, grouped by project,
-  with a two-step Stop.
+Coolant is for everyone who runs agents, not only people at home in a terminal.
+It's a calm status panel, not another Activity Monitor:
 
-It only redraws when new data arrives and uses about 1% of one core (measured
-on a Mac mini M4). Built with
+- **Cool, warm or hot, and why.** Judged over the last half minute, with the
+  main cause in plain words when it's warm ("Spotlight is re-indexing files
+  your agents write, using about 2 cores"). The panel redraws every 10 s and a
+  new status has to hold for 15 s, so nothing jumps around.
+- **Fix it, one click each.** It finds the git worktrees your agents create,
+  whichever tool made them, and offers the fixes above as buttons: stop
+  Spotlight indexing them, stop backing them up, prewarm, clean up, stop the
+  extra copies of a dev server, stop a Homebrew service that keeps crashing.
+  Each one explains what it will do before it does it, and the Spotlight and
+  Time Machine changes have an Undo.
+- **Menu bar.** The temperature sits in the menu bar with a thermometer that
+  fills up when the Mac runs warm or hot; the menu repeats the status and the
+  cause. Closing the window keeps Coolant running there.
+- **Details** opens the full dashboard when you want to dig in: temperature,
+  power, busy cores and fan; where the CPU is going, with OS overhead in
+  orange; agent sessions, top processes, and leftover dev servers grouped by
+  project with a two-step Stop.
+
+<br clear="right">
+
+![Coolant Details view](docs/img/dashboard.png)
+
+It samples every 10 s (every second only while Details is open) and idles at
+about 0.2% of one core (measured on a Mac mini M4). Built with
 [GPUI](https://gpui.rs), Zed's GPU UI framework.
 
 ```sh
@@ -129,7 +139,8 @@ scripts/package-macos.sh               # build Coolant.app and a .dmg
 ```
 
 Building needs only the Xcode command line tools; the shaders compile at
-launch. `scripts/screenshot.sh` regenerates the image above.
+launch. `scripts/screenshot.sh` regenerates the images above
+(`COOLANT_SCREENSHOT_DETAILS=1` for Details).
 
 ## How it works
 

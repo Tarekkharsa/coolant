@@ -5,9 +5,8 @@
 
 use crate::Dashboard;
 use crate::theme::*;
-use crate::widgets::card;
 use coolant_workspace::actions::{self, Done, Undo};
-use coolant_workspace::config::Config;
+use coolant_workspace::config::{Config, tilde};
 use coolant_workspace::doctor::{self, Action, Check, Status};
 use coolant_workspace::fsutil::human;
 use coolant_workspace::worktrees;
@@ -36,6 +35,10 @@ struct Outcome {
 }
 
 impl Fixes {
+    pub fn checks(&self) -> &[Check] {
+        &self.checks
+    }
+
     fn push(&mut self, message: String, undo: Option<Undo>, failed: bool) {
         self.next_id += 1;
         self.results.insert(0, Outcome { id: self.next_id, message, undo, failed });
@@ -173,12 +176,14 @@ impl Dashboard {
         }
     }
 
-    pub fn fixes_card(&self, cx: &mut Context<Self>) -> gpui::Div {
+    /// Rows for the fix list: recent results (with Undo), then every open
+    /// check. `compact` leaves out the longer explanations.
+    pub fn fix_rows(&self, compact: bool, cx: &mut Context<Self>) -> Vec<gpui::Div> {
         let f = &self.fixes;
-        let mut body = div().flex().flex_col().gap_3();
+        let mut rows = Vec::new();
         for r in &f.results {
             let id = r.id;
-            body = body.child(
+            rows.push(
                 div()
                     .flex()
                     .items_center()
@@ -192,35 +197,27 @@ impl Dashboard {
                     })),
             );
         }
-        if !f.loaded {
-            return card("Fixes", Some("checking your folders and settings…"), body);
+        let open = f.checks.iter().filter(|c| c.status != Status::Ok && (c.action.is_some() || !c.fix.is_empty()));
+        for (i, c) in open.enumerate() {
+            rows.push(self.fix_row(i, c, compact, cx));
         }
-        let open: Vec<&Check> =
-            f.checks.iter().filter(|c| c.status != Status::Ok && (c.action.is_some() || !c.fix.is_empty())).collect();
-        if open.is_empty() {
-            body = body.child(div().text_sm().text_color(GOOD).child("✓ Nothing to fix: your setup is in good shape."));
-        }
-        for (i, c) in open.into_iter().enumerate() {
-            body = body.child(self.fix_row(i, c, cx));
-        }
-        for c in f.checks.iter().filter(|c| c.status == Status::Ok) {
-            body = body.child(div().text_xs().text_color(GOOD).child(format!("✓ {}", c.title)));
-        }
-        card("Fixes", Some("one click each; Undo where possible"), body)
+        rows
     }
 
-    fn fix_row(&self, i: usize, c: &Check, cx: &mut Context<Self>) -> gpui::Div {
+    fn fix_row(&self, i: usize, c: &Check, compact: bool, cx: &mut Context<Self>) -> gpui::Div {
         let f = &self.fixes;
         let dot: Rgba = if c.status == Status::Warn { WARN } else { ACCENT };
+        let (title, sub) = if compact { compact_text(c) } else { (c.title.clone(), c.detail.clone()) };
         let mut text = div()
             .flex_1()
             .min_w_0()
             .flex()
             .flex_col()
             .gap_0p5()
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(c.title.clone()))
-            .child(div().text_xs().text_color(MUTED).child(c.detail.clone()));
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
+            .child(div().text_xs().text_color(MUTED).child(sub));
         let confirming = f.confirm.as_ref().filter(|(t, _)| *t == c.title).map(|(_, label)| label.clone());
+        let is_confirming = confirming.is_some();
         if let (Some(_), Some(a)) = (&confirming, &c.action) {
             text = text.child(div().text_xs().text_color(TEXT).child(explain(a)));
         }
@@ -247,28 +244,66 @@ impl Dashboard {
                             },
                         )))
                         .child(button(("confirm", i), label, ACCENT).on_click(click)),
+                    None if compact => div().child(button(("fix", i), short_label(a), TRACK).on_click(click)),
                     None => div().child(button(("fix", i), button_label(a), TRACK).on_click(click)),
                 }
             }
         };
-        div()
+        let label = div()
             .flex()
-            .items_center()
-            .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().mt_1p5().size_2().rounded_full().bg(dot).flex_none())
-                    .child(text),
-            )
-            .child(buttons)
+            .gap_2()
+            .flex_1()
+            .min_w_0()
+            .child(div().mt_1p5().size_2().rounded_full().bg(dot).flex_none())
+            .child(text);
+        // In the narrow panel the explanation needs the full width, so the
+        // Cancel/confirm buttons go underneath it.
+        if compact && is_confirming {
+            return div().flex().flex_col().gap_2().child(label).child(div().flex().justify_end().child(buttons));
+        }
+        div().flex().items_center().gap_3().child(label).child(buttons)
     }
 }
 
-fn button(id: (&'static str, usize), label: impl Into<gpui::SharedString>, bg: Rgba) -> gpui::Stateful<gpui::Div> {
+/// A short title and context line for the compact list.
+fn compact_text(c: &Check) -> (String, String) {
+    let paths = |ps: &[std::path::PathBuf]| {
+        let first = ps.first().map(|p| tilde(p)).unwrap_or_default();
+        if ps.len() > 1 { format!("{first} and {} more", ps.len() - 1) } else { first }
+    };
+    match &c.action {
+        Some(Action::Tune { paths: ps }) => ("Stop Spotlight indexing agent worktrees".into(), paths(ps)),
+        Some(Action::ExcludeFromBackups { paths: ps }) => ("Stop backing up agent worktrees".into(), paths(ps)),
+        Some(Action::Prewarm { worktrees, .. }) => {
+            (format!("Prewarm {} new worktree(s)", worktrees.len()), "so their first build isn't from scratch".into())
+        }
+        Some(Action::Sweep) => ("Free space in finished worktrees".into(), first_clause(&c.title)),
+        Some(Action::StopService { formula }) => {
+            (format!("Stop {formula}, which keeps crashing"), first_clause(&c.title))
+        }
+        Some(Action::StopProcesses { procs }) => {
+            (format!("Stop {} duplicate dev server(s)", procs.len()), first_clause(&c.title))
+        }
+        None => (c.title.clone(), first_clause(&c.detail)),
+    }
+}
+
+fn short_label(a: &Action) -> &'static str {
+    match a {
+        Action::Tune { .. } | Action::ExcludeFromBackups { .. } => "Fix",
+        Action::Prewarm { .. } => "Prewarm",
+        Action::Sweep => "Clean up",
+        Action::StopService { .. } | Action::StopProcesses { .. } => "Stop",
+    }
+}
+
+/// The first clause of a check's explanation, for the compact list.
+fn first_clause(detail: &str) -> String {
+    let end = detail.find([':', '.', ';']).unwrap_or(detail.len());
+    detail[..end].to_string()
+}
+
+pub fn button(id: (&'static str, usize), label: impl Into<gpui::SharedString>, bg: Rgba) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .flex_none()

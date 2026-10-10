@@ -21,6 +21,7 @@ pub struct MenuBar {
     button: id,
     summary: id,
     cause: id,
+    symbol: std::cell::Cell<&'static str>,
 }
 
 impl MenuBar {
@@ -52,7 +53,7 @@ impl MenuBar {
             let app: id = msg_send![class!(NSApplication), sharedApplication];
             add(menu, "Quit coolant", Some(app), Some(sel!(terminate:)), "q");
             item.setMenu_(menu);
-            MenuBar { button, summary, cause }
+            MenuBar { button, summary, cause, symbol: std::cell::Cell::new("thermometer.medium") }
         }
     }
 
@@ -65,6 +66,25 @@ impl MenuBar {
             set_title(self.summary, summary);
             set_title(self.cause, cause);
             let _: () = msg_send![self.cause, setHidden: if cause.is_empty() { YES } else { NO }];
+        }
+    }
+}
+
+impl MenuBar {
+    /// Shows another SF Symbol (thermometer.low/medium/high) as the icon.
+    pub fn set_symbol(&self, name: &'static str) {
+        if self.symbol.get() == name {
+            return;
+        }
+        self.symbol.set(name);
+        // SAFETY: see `new`; the image is autoreleased, the button retains it.
+        unsafe {
+            let n = ns(name);
+            let image: id = msg_send![class!(NSImage), imageWithSystemSymbolName: n accessibilityDescription: nil];
+            let _: () = msg_send![n, release];
+            if image != nil {
+                let _: () = msg_send![self.button, setImage: image];
+            }
         }
     }
 }
