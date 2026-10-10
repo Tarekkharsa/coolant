@@ -795,6 +795,11 @@ mod tests {
         thread::sleep(Duration::from_secs(1));
         let s = r.read().unwrap();
         eprintln!("{s:?}");
+        // Virtual machines (such as CI runners) expose no temperature sensors.
+        if crate::darwin::ffi::sysctl_u64("kern.hv_vmm_present") == Some(1) {
+            eprintln!("skipping: running in a virtual machine");
+            return;
+        }
 
         assert_ne!(s.pressure, ThermalPressure::Unknown, "thermal pressure unavailable");
         assert!(

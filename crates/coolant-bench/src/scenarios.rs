@@ -84,7 +84,7 @@ pub(crate) fn scenarios(c: &Config, tmpl: &Path) -> HashMap<&'static str, Scenar
 }
 
 fn copy_scenario(c: &Config, clone: bool) -> Scenario {
-    let (name, how) = if clone { (SC_CLONEFILE_DEPS, "cp -c -R (APFS clonefile)") } else { (SC_COPY_DEPS, "cp -R") };
+    let (name, how) = if clone { (SC_CLONEFILE_DEPS, CLONE_HOW) } else { (SC_COPY_DEPS, "cp -R") };
     let files = c.deps_files;
     Scenario {
         name,
@@ -512,13 +512,22 @@ pub fn git(cancel: &AtomicBool, dir: &Path, status_n: usize, worktrees: usize) -
 
 // --- copy / clonefile ----------------------------------------------------------
 
-/// Copies the tree at `src` to `dst` with /bin/cp -R, or with cp -c -R
-/// (APFS clonefile) when `clone` is set.
+#[cfg(target_os = "macos")]
+const CLONE_FLAG: &str = "-c";
+#[cfg(target_os = "macos")]
+const CLONE_HOW: &str = "cp -c -R (APFS clonefile)";
+#[cfg(not(target_os = "macos"))]
+const CLONE_FLAG: &str = "--reflink=auto";
+#[cfg(not(target_os = "macos"))]
+const CLONE_HOW: &str = "cp --reflink=auto -R (reflinks where the filesystem supports them)";
+
+/// Copies the tree at `src` to `dst` with /bin/cp -R, or with copy-on-write
+/// clones (APFS clonefile, Linux reflinks) when `clone` is set.
 pub fn copy_deps(cancel: &AtomicBool, src: &Path, dst: &Path, clone: bool) -> Result<()> {
     fs::create_dir_all(dst.parent().context("copy: destination has no parent")?)?;
     let mut args: Vec<&std::ffi::OsStr> = vec!["-R".as_ref(), src.as_ref(), dst.as_ref()];
     if clone {
-        args.insert(0, "-c".as_ref());
+        args.insert(0, CLONE_FLAG.as_ref());
     }
     let what = format!("cp {}", args.iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" "));
     run_checked(cancel, Command::new("/bin/cp").args(&args), &what).map(|_| ())
