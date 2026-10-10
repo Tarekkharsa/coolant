@@ -1,0 +1,33 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+        if: matrix.os == 'ubuntu-latest'
+      # The GPUI app is macOS-only for now (Linux needs extra system libs).
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+        if: matrix.os == 'macos-latest'
+      - run: cargo clippy --workspace --exclude coolant-app --all-targets -- -D warnings
+        if: matrix.os != 'macos-latest'
+      # Linux has a backend; Windows only builds until its backend lands.
+      - run: cargo test --workspace
+        if: matrix.os == 'macos-latest'
+      - run: cargo test --workspace --exclude coolant-app
+        if: matrix.os == 'ubuntu-latest'
+      - run: cargo build --workspace --exclude coolant-app
+        if: matrix.os == 'windows-latest'
