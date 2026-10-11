@@ -36,6 +36,16 @@ pub fn sysctl_u64(name: &str) -> Option<u64> {
     }
 }
 
+/// Bytes of swap in use.
+pub fn swap_used() -> Option<u64> {
+    let name = cstr("vm.swapusage");
+    let mut v = MaybeUninit::<libc::xsw_usage>::zeroed();
+    let mut size = size_of::<libc::xsw_usage>();
+    let r = unsafe { libc::sysctlbyname(name.as_ptr(), v.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) };
+    // SAFETY: zero-initialised and filled by the kernel on success.
+    (r == 0).then(|| unsafe { v.assume_init() }.xsu_used)
+}
+
 pub fn user_name(uid: u32) -> Option<String> {
     let mut pw = MaybeUninit::<libc::passwd>::uninit();
     let mut buf = vec![0 as libc::c_char; 1024];

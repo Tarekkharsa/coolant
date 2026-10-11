@@ -700,6 +700,16 @@ impl SensorReader for Reader {
             }
         }
 
+        // Unprivileged; the same numbers `memory_pressure` prints.
+        s.memory_pressure = match crate::darwin::ffi::sysctl_u64("kern.memorystatus_vm_pressure_level") {
+            Some(1) => MemoryPressure::Normal,
+            Some(2) => MemoryPressure::Warning,
+            Some(4) => MemoryPressure::Critical,
+            _ => MemoryPressure::Unknown,
+        };
+        s.memory_free_pct = crate::darwin::ffi::sysctl_u64("kern.memorystatus_level").unwrap_or(0) as f64;
+        s.swap_used_bytes = crate::darwin::ffi::swap_used().unwrap_or(0);
+
         let mut cpu = self.hid_temps(&self.hid_cpu);
         if let (true, Some(smc)) = (cpu.is_empty(), &self.smc) {
             cpu = smc.temps(&self.smc_cpu);

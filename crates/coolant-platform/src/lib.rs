@@ -137,6 +137,30 @@ impl fmt::Display for ThermalPressure {
     }
 }
 
+/// The kernel's view of memory: whether it has started compressing, swapping
+/// and asking apps to free memory.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryPressure {
+    #[default]
+    Unknown,
+    Normal,
+    Warning,
+    Critical,
+}
+
+impl fmt::Display for MemoryPressure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Unknown => "unknown",
+            Self::Normal => "normal",
+            Self::Warning => "warning",
+            Self::Critical => "critical",
+        };
+        f.write_str(s)
+    }
+}
+
 /// Whatever the platform could read; zero means unavailable.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Sensors {
@@ -152,6 +176,13 @@ pub struct Sensors {
     pub soc_power_w: f64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fan_rpm: Vec<f64>,
+    #[serde(default)]
+    pub memory_pressure: MemoryPressure,
+    /// Share of memory the kernel considers available, 0–100.
+    #[serde(default)]
+    pub memory_free_pct: f64,
+    #[serde(default)]
+    pub swap_used_bytes: u64,
 }
 
 /// Counts process creations since it was opened.

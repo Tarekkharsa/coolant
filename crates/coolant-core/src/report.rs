@@ -81,7 +81,13 @@ pub fn findings(run: &Run) -> Vec<Finding> {
         push(
             sev(rate, 50.0),
             format!("{rate:.0} processes launched per second"),
-            "Every launch costs fork/exec and dynamic linking, plus code-signing checks on macOS. Short-lived git/rg/node processes add up.",
+            &format!(
+                "Every launch costs fork/exec and dynamic linking, plus code-signing checks on macOS. Short-lived git/rg/node processes add up.{}",
+                match run.unnamed_spawns * 100 / run.spawns.max(1) {
+                    0 => String::new(),
+                    pct => format!(" {pct}% exited too quickly to be named; they're counted under \"other\"."),
+                }
+            ),
             "",
         );
     }
@@ -116,6 +122,29 @@ pub fn findings(run: &Run) -> Vec<Finding> {
             format!("Thermal pressure was {p} for {secs:.0}s"),
             "macOS was throttling to keep temperatures in check.",
             "",
+        );
+    }
+    let t = &run.thermal;
+    for (p, secs) in &t.memory_pressure_s {
+        push(
+            if p == "critical" { Severity::High } else { Severity::Medium },
+            format!("Memory pressure was {p} for {secs:.0}s"),
+            &format!(
+                "macOS was short of memory: compressing, swapping and asking apps to free memory. As little as {:.0}% was available; swap went from {} to {}.",
+                t.memory_free_min_pct,
+                bytes(t.swap_start_bytes),
+                bytes(t.swap_max_bytes)
+            ),
+            "Fewer parallel builds and type checkers (tsc, tsgolint, vite each take gigabytes), or fewer agent sessions at once.",
+        );
+    }
+    let grew = t.swap_max_bytes.saturating_sub(t.swap_start_bytes);
+    if t.memory_pressure_s.is_empty() && grew >= 512 << 20 {
+        push(
+            Severity::Medium,
+            format!("Swap grew by {} during the run", bytes(grew)),
+            "Something needed more memory than was free, and macOS wrote memory to disk to make room.",
+            "Fewer parallel builds and type checkers, or fewer agent sessions at once.",
         );
     }
     fs.sort_by_key(|f| f.severity);
@@ -157,7 +186,18 @@ pub fn text(run: &Run) -> String {
         if t.fan_max_rpm > 0.0 {
             let _ = write!(w, ", fan max {:.0} rpm", t.fan_max_rpm);
         }
-        w.push_str("\n\n");
+        w.push('\n');
+    }
+    if t.memory_free_min_pct > 0.0 {
+        let _ =
+            write!(w, "Memory: at least {:.0}% available, swap {}", t.memory_free_min_pct, bytes(t.swap_start_bytes));
+        if t.swap_max_bytes > t.swap_start_bytes {
+            let _ = write!(w, " → max {}", bytes(t.swap_max_bytes));
+        }
+        w.push('\n');
+    }
+    if t.cpu_temp_max_c > 0.0 || t.cpu_power_avg_w > 0.0 || t.memory_free_min_pct > 0.0 {
+        w.push('\n');
     }
 
     let fs = findings(run);

@@ -8,6 +8,7 @@ use crate::windows::UpdateState;
 use crate::{PanelMode, menubar};
 use coolant_core::classify::Category;
 use coolant_core::profile::Run;
+use coolant_platform::MemoryPressure;
 use coolant_workspace::doctor::Status as CheckStatus;
 use gpui::{Animation, AnimationExt, Context, FontWeight, Rgba, div, prelude::*, pulsating_between};
 use std::time::{Duration, Instant};
@@ -105,20 +106,31 @@ pub fn read(run: &Run, window_s: f64) -> Option<Reading> {
     } else {
         Level::Cool
     };
+    let short_of_memory = matches!(sn.memory_pressure, MemoryPressure::Warning | MemoryPressure::Critical);
+    let level = if level == Level::Cool && short_of_memory { Level::Warm } else { level };
 
     let fan = match sn.fan_rpm.first() {
         None => None,
         Some(&r) if r < 1500.0 => Some("fan quiet".to_string()),
         Some(&r) => Some(format!("fan {r:.0} rpm")),
     };
-    let line = [Some(format!("{:.0}°C", sn.cpu_temp_c)), fan, Some(format!("{busy:.1} busy cores"))]
+    let memory = short_of_memory.then(|| "memory low".to_string());
+    let line = [Some(format!("{:.0}°C", sn.cpu_temp_c)), fan, Some(format!("{busy:.1} busy cores")), memory]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
         .join(" · ");
 
     let top = Category::ALL.iter().map(|c| (*c, cat(*c))).max_by(|a, b| a.1.total_cmp(&b.1));
-    let cause = top.filter(|(_, v)| *v >= 0.5).map(|(c, v)| cause_text(c, v));
+    let cause = if short_of_memory {
+        let swap = sn.swap_used_bytes as f64 / (1u64 << 30) as f64;
+        Some(format!(
+            "The Mac is short of memory{}. Type checkers and builds (tsc, vite, linters) can take gigabytes each; fewer at once helps.",
+            if swap >= 0.1 { format!(" and has {swap:.1} GB in swap") } else { String::new() }
+        ))
+    } else {
+        top.filter(|(_, v)| *v >= 0.5).map(|(c, v)| cause_text(c, v))
+    };
     Some(Reading { level, temp_c: sn.cpu_temp_c, line, cause })
 }
 
@@ -628,6 +640,16 @@ mod tests {
         assert_eq!(read30(&run(1.0, 0.0, 60.0, ThermalPressure::Heavy)).unwrap().level, Level::Hot);
         assert_eq!(read30(&run(8.0, 0.0, 60.0, ThermalPressure::Nominal)).unwrap().level, Level::Hot);
         assert!(read(&Run::default(), 30.0).is_none());
+
+        let mut tight = run(0.8, 0.0, 45.0, ThermalPressure::Nominal);
+        for s in &mut tight.samples {
+            s.sensors.memory_pressure = MemoryPressure::Warning;
+            s.sensors.swap_used_bytes = 3 << 30;
+        }
+        let tight = read30(&tight).unwrap();
+        assert_eq!(tight.level, Level::Warm);
+        assert_eq!(tight.line, "45°C · fan quiet · 0.8 busy cores · memory low");
+        assert!(tight.cause.unwrap().contains("3.0 GB in swap"));
     }
 
     #[test]

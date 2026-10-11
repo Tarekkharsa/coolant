@@ -199,6 +199,20 @@ impl SensorReader for Reader {
         s.gpu_temp_c = self.gpu_temp.as_deref().and_then(celsius).unwrap_or(0.0);
         s.gpu_power_w = self.gpu_power.as_deref().and_then(read_u64).map_or(0.0, |uw| uw as f64 / 1e6);
         s.fan_rpm = self.fans.iter().filter_map(|p| read_u64(p)).map(|v| v as f64).collect();
+        if let Some(m) = read_lossy("/proc/meminfo") {
+            let kb = |key: &str| -> Option<u64> {
+                let v = m.lines().find_map(|l| l.strip_prefix(key))?;
+                v.split_ascii_whitespace().next()?.parse().ok()
+            };
+            if let (Some(total), Some(avail)) = (kb("MemTotal:"), kb("MemAvailable:"))
+                && total > 0
+            {
+                s.memory_free_pct = 100.0 * avail as f64 / total as f64;
+            }
+            if let (Some(total), Some(free)) = (kb("SwapTotal:"), kb("SwapFree:")) {
+                s.swap_used_bytes = total.saturating_sub(free) * 1024;
+            }
+        }
 
         let now = Instant::now();
         let watts = |domains: &mut Vec<Domain>| -> Option<f64> {

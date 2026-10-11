@@ -207,7 +207,9 @@ this profile overcount; see the method notes. Details are in
   `agent`, and the categories summed to 1,972 CPU-s against 813 measured by the
   host counters. The busy-core totals come from the host counters and are
   correct; per-category and per-session totals in profiles with build tools
-  in them are not, until this is fixed.
+  in them are not. Fixed after 0.2.0-beta.8: a vanished process is credited
+  to its nearest living ancestor, and a sample can't add more hidden CPU than
+  the host counters say was busy.
 - Temperatures and power come from unprivileged sources: IOHID die sensors,
   SMC, IOReport GPU energy, and kernel per-coalition energy for CPU (the
   IOReport CPU energy counters don't change for unprivileged readers on

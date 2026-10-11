@@ -2,7 +2,9 @@
 //! spawns to categories and agent sessions.
 
 use crate::classify::{self, Category, Labeled};
-use coolant_platform::{Backend, CpuTimes, Machine, SensorReader, Sensors, SpawnCounter, ThermalPressure};
+use coolant_platform::{
+    Backend, CpuTimes, Machine, MemoryPressure, SensorReader, Sensors, SpawnCounter, ThermalPressure,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -54,6 +56,9 @@ pub struct Run {
     /// Programs running many times at once, e.g. one tsserver per worktree.
     pub duplicates: Vec<Duplicate>,
     pub spawns: u64,
+    /// Spawns that exited before they could be named.
+    #[serde(default)]
+    pub unnamed_spawns: u64,
     pub thermal: Thermal,
     pub samples: Vec<Sample>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -130,6 +135,16 @@ pub struct Thermal {
     pub fan_max_rpm: f64,
     /// Seconds spent at each non-nominal pressure level.
     pub pressure_s: BTreeMap<String, f64>,
+    /// Lowest share of memory available, 0–100 (0 when unknown).
+    #[serde(default)]
+    pub memory_free_min_pct: f64,
+    #[serde(default)]
+    pub swap_start_bytes: u64,
+    #[serde(default)]
+    pub swap_max_bytes: u64,
+    /// Seconds spent at each memory pressure level above normal.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub memory_pressure_s: BTreeMap<String, f64>,
 }
 
 /// A profiling session in progress. Dropping it without calling
@@ -268,6 +283,7 @@ impl Session {
             ..Default::default()
         };
 
+        let before = self.attributed;
         for (k, l) in &cur {
             let p = &l.process;
             let old = prev.get(k);
@@ -309,17 +325,34 @@ impl Session {
         // Short-lived children. A parent's reaped-children CPU grows by each
         // child's whole lifetime; whatever we didn't already see a child use
         // was spent by processes that came and went between samples.
+        // What we saw a vanished process use goes to its nearest ancestor
+        // still alive: when a shell and the node under it exit together, the
+        // node's CPU reaches the surviving parent through the shell.
+        let direct = self.attributed - before;
+        let vanished: HashMap<i32, (i32, Duration)> = prev
+            .iter()
+            .filter(|(k, _)| !cur.contains_key(*k))
+            .map(|(_, l)| (l.process.pid, (l.process.ppid, l.process.cpu_time + l.process.child_cpu_time)))
+            .collect();
         let mut gone: HashMap<i32, Duration> = HashMap::new();
-        for (k, l) in &prev {
-            if !cur.contains_key(k) {
-                *gone.entry(l.process.ppid).or_default() += l.process.cpu_time + l.process.child_cpu_time;
+        for &(ppid, used) in vanished.values() {
+            let mut up = ppid;
+            for _ in 0..64 {
+                match vanished.get(&up) {
+                    Some(&(pp, _)) if pp != up => up = pp,
+                    _ => break,
+                }
             }
+            *gone.entry(up).or_default() += used;
         }
         let spawns = self.spawns.as_mut().map(|c| c.drain()).unwrap_or_default();
         s.spawns = spawns.len() as u64;
         self.run.spawns += s.spawns;
         let mut spawned: HashMap<i32, HashMap<Category, u32>> = HashMap::new();
         for sp in &spawns {
+            if sp.name.is_empty() {
+                self.run.unnamed_spawns += 1;
+            }
             let cat = if sp.name.is_empty() { Category::Other } else { classify::of(&sp.name, "") };
             self.cats.entry(cat).or_default().spawns += 1;
             if let Some(parent) = by_pid.get(&sp.ppid)
@@ -329,13 +362,29 @@ impl Session {
             }
             *spawned.entry(sp.ppid).or_default().entry(cat).or_default() += 1;
         }
+        let mut hidden: Vec<(&Labeled, Duration)> = Vec::new();
         for (k, l) in &cur {
             let Some(old) = prev.get(k) else { continue };
             if !l.process.detailed || !old.process.detailed || l.process.child_cpu_time < old.process.child_cpu_time {
                 continue;
             }
             let grown = l.process.child_cpu_time - old.process.child_cpu_time;
-            let hidden = grown.saturating_sub(gone.get(&l.process.pid).copied().unwrap_or_default());
+            let h = grown.saturating_sub(gone.get(&l.process.pid).copied().unwrap_or_default());
+            if !h.is_zero() {
+                hidden.push((l, h));
+            }
+        }
+        // Never more than the machine was busy: anything beyond that was
+        // counted before (a child's CPU from before the run, say).
+        let room = busy.saturating_sub(direct);
+        let total: Duration = hidden.iter().map(|(_, h)| *h).sum();
+        if total > room {
+            let scale = room.as_secs_f64() / total.as_secs_f64();
+            for (_, h) in &mut hidden {
+                *h = h.mul_f64(scale);
+            }
+        }
+        for (l, hidden) in hidden {
             if hidden.is_zero() {
                 continue;
             }
@@ -488,6 +537,17 @@ fn summarize(samples: &[Sample]) -> Thermal {
         if !matches!(sn.pressure, ThermalPressure::Unknown | ThermalPressure::Nominal) {
             *t.pressure_s.entry(sn.pressure.to_string()).or_default() += s.t - prev_t;
         }
+        if sn.memory_free_pct > 0.0 {
+            if t.memory_free_min_pct == 0.0 {
+                t.swap_start_bytes = sn.swap_used_bytes;
+                t.memory_free_min_pct = sn.memory_free_pct;
+            }
+            t.memory_free_min_pct = t.memory_free_min_pct.min(sn.memory_free_pct);
+            t.swap_max_bytes = t.swap_max_bytes.max(sn.swap_used_bytes);
+        }
+        if matches!(sn.memory_pressure, MemoryPressure::Warning | MemoryPressure::Critical) {
+            *t.memory_pressure_s.entry(sn.memory_pressure.to_string()).or_default() += s.t - prev_t;
+        }
         prev_t = s.t;
     }
     if n > 0.0 {
@@ -588,5 +648,64 @@ mod tests {
         assert_eq!(run.sessions.len(), 1);
         assert_eq!(run.sessions[0].key, "claude:100");
         assert_eq!((run.sessions[0].cpu_s * 1000.0).round(), 650.0);
+    }
+    /// A shell and the node under it exit in the same interval: the node's
+    /// CPU reaches the agent through the shell and must not count twice,
+    /// including what it used before the run started.
+    #[test]
+    fn grandchildren_that_exit_together_count_once() {
+        let p = |pid, ppid, name: &str, cpu, child| Process {
+            pid,
+            ppid,
+            name: name.into(),
+            command: name.into(),
+            detailed: true,
+            cpu_time: ms(cpu),
+            child_cpu_time: ms(child),
+            start_ms: pid as u64,
+            ..Default::default()
+        };
+        let fake = Arc::new(Fake {
+            steps: vec![
+                vec![p(100, 1, "claude", 1000, 0), p(200, 100, "sh", 10, 0), p(300, 200, "node", 3000, 0)],
+                vec![p(100, 1, "claude", 1000, 0), p(200, 100, "sh", 10, 0), p(300, 200, "node", 3500, 0)],
+                // both gone; node used 100 ms more before it exited
+                vec![p(100, 1, "claude", 1000, 3610)],
+            ],
+            cpu: vec![0, 500, 600],
+            i: Mutex::new(0),
+        });
+        let rec = Recorder::start(fake.clone(), Options { interval: ms(20), ..Default::default() }).unwrap();
+        while *fake.i.lock().unwrap() < 3 {
+            std::thread::sleep(ms(5));
+        }
+        let run = rec.stop();
+        let cpu = |c: Category| (run.category(c).cpu_s * 1000.0).round();
+        assert_eq!(cpu(Category::Runtime), 500.0);
+        assert_eq!(cpu(Category::Agent), 100.0);
+        assert_eq!((run.sessions[0].cpu_s * 1000.0).round(), 600.0);
+    }
+
+    /// Hidden CPU can't exceed what the machine was busy for.
+    #[test]
+    fn hidden_cpu_is_capped_by_the_host() {
+        let agent = |child| Process {
+            pid: 100,
+            ppid: 1,
+            name: "claude".into(),
+            command: "claude".into(),
+            detailed: true,
+            child_cpu_time: ms(child),
+            start_ms: 5,
+            ..Default::default()
+        };
+        let fake =
+            Arc::new(Fake { steps: vec![vec![agent(0)], vec![agent(50_000)]], cpu: vec![0, 800], i: Mutex::new(0) });
+        let rec = Recorder::start(fake.clone(), Options { interval: ms(20), ..Default::default() }).unwrap();
+        while *fake.i.lock().unwrap() < 2 {
+            std::thread::sleep(ms(5));
+        }
+        let run = rec.stop();
+        assert!(run.category(Category::Agent).cpu_s <= 0.8 + 1e-9, "{}", run.category(Category::Agent).cpu_s);
     }
 }

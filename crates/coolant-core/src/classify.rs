@@ -114,9 +114,11 @@ use Category::*;
 /// tsserver is a language server, not a generic runtime.
 static CMD_RULES: LazyLock<Vec<(Category, Regex)>> = LazyLock::new(|| {
     [
+        // Claude in Chrome's bridge runs the claude binary but isn't a session.
+        (AgentHost, r"\s--chrome-native-host(\s|$)"),
         (Agent, r"@anthropic-ai/claude-code|/claude(\s|$)|/claude/versions/[0-9]|@openai/codex|/codex(\s|$)|@google/gemini-cli|/opencode(\s|$)|/aider(\s|$)|@sourcegraph/amp|cursor-agent"),
         (LanguageServer, r"tsserver\.js|typescript-language-server|vtsls|eslintServer|eslint-language-server|tailwindcss-language-server|vscode-.*-language-server|pyright|pylance|biome lsp|oxc_language_server|astro-ls|svelte-language-server|vue-language-server"),
-        (Build, r"/(tsc|esbuild|vite|webpack|rollup|turbo|nx|jest|vitest|playwright|next|tsx|ts-node|swc)(\.js|\.mjs|\.cjs)?(\s|$)|node_modules/\.bin/(tsc|vite|vitest|jest|next|turbo|eslint|prettier)"),
+        (Build, r"/(tsc|tsgo|tsgolint|oxlint|esbuild|vite|webpack|rollup|turbo|nx|jest|vitest|playwright|next|tsx|ts-node|swc)(\.js|\.mjs|\.cjs)?(\s|$)|node_modules/\.bin/(tsc|vite|vitest|jest|next|turbo|eslint|prettier)"),
         (PackageManager, r"/(npm|npx|pnpm|yarn)(-cli)?(\.js|\.cjs)?(\s|$)|corepack"),
     ]
     .into_iter()
@@ -416,6 +418,7 @@ const NAME_RULES: &[(Category, &[&str])] = &[
         ],
     ),
     (Kernel, &["kernel_task", "System", "launchd"]),
+    (Build, &["tsc", "tsgo", "tsgolint", "oxlint", "esbuild"]),
 ];
 
 /// Exact names first; a case-insensitive fallback where the first rule
@@ -455,6 +458,10 @@ pub fn of(name: &str, command: &str) -> Category {
     }
     if name.starts_with("com.apple.DriverKit") {
         return Kernel;
+    }
+    // XProtect's scanners: XProtectRemediatorPirrit, ...Adload, ...
+    if name.starts_with("XProtectRemediator") {
+        return Security;
     }
     Other
 }
@@ -544,6 +551,9 @@ mod tests {
             // The native installer runs a binary named after its version.
             ("2.1.295", "/Users/u/.local/share/claude/versions/2.1.295 --resume x", Agent),
             ("Claude", "/Applications/Claude.app/Contents/MacOS/Claude", AgentHost),
+            ("claude", "/Users/x/.local/bin/claude --chrome-native-host", AgentHost),
+            ("tsgolint", "/repo/node_modules/@oxlint/tsgolint/bin/tsgolint headless", Build),
+            ("XProtectRemediatorPirrit", "", Security),
             ("node", "node /x/node_modules/typescript/lib/tsserver.js --stdio", LanguageServer),
             ("node", "node /usr/local/bin/codex exec", Agent),
             ("node", "node --env-file=.env src/main.ts", Runtime),
