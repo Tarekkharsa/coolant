@@ -6,7 +6,8 @@ with coolant's own profiler and benchmarks. Raw results are in
 the finding and the absolute values as illustrative. Quick-preset runs on a
 MacBook Pro 13" M1 (8 cores, 8 GB, macOS 26.5.2) and on a company-managed
 MacBook Pro 14" M2 Pro (10 cores, 16 GB, macOS 27.0, CrowdStrike Falcon) are
-noted below where they differ.
+noted below where they differ, as are 2-minute profiles of the M1 at idle and
+of the M2 Pro with an agent at work.
 
 ## 1. Spotlight is the biggest hidden cost, and it's invisible to the agent
 
@@ -169,11 +170,44 @@ Every number in the M1 runs carries this background load, which is why some of
 its cells flip direction between runs. Details are in
 [`results/2026-10-10-m1-macbook-pro-idle.md`](results/2026-10-10-m1-macbook-pro-idle.md).
 
+## 8. One agent session can keep most of the Mac busy
+
+A 2-minute profile of the M2 Pro while one Claude Code session (with its
+subagents) worked on a TypeScript monorepo:
+
+- **6.77 cores busy on average**, most of it under that session:
+  `vite build`, two `tsc` processes (2.8 and 3.1 GB), three `tsgolint`
+  (2.5–2.7 GB each) and `git`. Subagents run inside the session's process, so
+  the profile can't split the work between them.
+- **The Mac got warm.** CPU 58–61 °C, 14.8 W on average (22.5 W at most), fans
+  up to 4,915 rpm. During the benchmarks the day before it stayed at 35–38 °C
+  under 7 W with the fans off.
+- **155 process launches per second.** At about 4 ms per launch on this Mac
+  (finding 6), that is about 0.6 s of start-up time every second. 89% of the
+  launches had no name, so the profile files them under "other".
+- **The agent's work dwarfs the OS overhead here.** Spotlight, security and
+  file-system daemons together used under 0.2 cores, because the session
+  worked in folders it had already built.
+
+Apple's `XProtectRemediator*` malware scans ran during the profile (0.6 cores,
+unrelated to the agent). A third `claude` process, `claude --chrome-native-host`,
+is the Claude in Chrome bridge, not an agent session. The category totals in
+this profile overcount; see the method notes. Details are in
+[`results/2026-10-11-m2-pro-macbook-pro-busy.md`](results/2026-10-11-m2-pro-macbook-pro-busy.md).
+
 ## Method notes
 
 - CPU per category comes from sampling every process once per second
   (`/bin/ps` sees all users' processes), plus CPU of short-lived children
   recovered from their parents' reaped-children counters.
+- That recovery overcounts when a process and its own children exit in the
+  same sample interval: the children's CPU reaches the surviving ancestor but
+  isn't subtracted, so it is counted twice, including CPU they used before the
+  profile started. In the M2 Pro busy profile one sample added 1,108 CPU-s to
+  `agent`, and the categories summed to 1,972 CPU-s against 813 measured by the
+  host counters. The busy-core totals come from the host counters and are
+  correct; per-category and per-session totals in profiles with build tools
+  in them are not, until this is fixed.
 - Temperatures and power come from unprivileged sources: IOHID die sensors,
   SMC, IOReport GPU energy, and kernel per-coalition energy for CPU (the
   IOReport CPU energy counters don't change for unprivileged readers on

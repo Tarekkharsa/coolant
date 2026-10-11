@@ -137,6 +137,17 @@ Six `XProtectRemediator*` processes (Pirrit, SheepSwap, Bundlore, SnowDrift,
 Adload, SnowBeagle) used about 0.6 cores together, classified as "other". These
 are XProtect's periodic scans, unrelated to the agent.
 
+## Other observations
+
+- **Memory.** The 40 busiest processes reported 33.8 GB resident on a 16 GB
+  Mac, most of it in `tsc`, `tsgolint` and `node`. Resident size counts shared
+  pages once per process, so this doesn't prove the Mac was short of memory;
+  after the run swap was 0 and 65% of memory was free. Coolant doesn't record
+  memory pressure or swap, so the profile can't say whether it was.
+- **Spotlight and security were small here** (under 0.2 cores together, plus
+  0.6 cores of XProtect scans), because the session worked in folders it had
+  already built.
+
 ## Suggestions for coolant
 
 From this run:
@@ -147,5 +158,7 @@ From this run:
   type-aware linter, 2.5 GB each) as `build`.
 - **sessions:** `claude --chrome-native-host` is a browser bridge, not an
   agent session; leave it out of "Agent sessions", or show it as a host.
+- **profile: record memory pressure and swap** alongside the thermals, so a
+  run with several 3 GB type checkers can say whether the Mac was swapping.
 - **spawns:** 89% of launches had no name. If the name can't be read at exec
   time, the parent's category or command would still say more than "other".
