@@ -14,6 +14,7 @@ themselves. It's work the OS and your tooling do *in reaction* to them:
 - **Duplicates**: the same dev server or watcher started twice in one project, or two container VMs (Docker Desktop and OrbStack) running at once
 - **Security software** on company Macs (CrowdStrike Falcon and similar) that checks every program start; coolant measures how much slower that makes them
 - **Duplicated tooling**: one `tsserver` per worktree, file watchers on the same trees
+- **Too much at once**: builds, type checkers and linters (`vite`, `tsc`, `tsgolint`) that take gigabytes each, until the Mac runs short of memory and swaps
 
 coolant **measures** this, attributing CPU, disk I/O, process spawns,
 temperature and power to categories and to agent sessions. Then it **fixes**
@@ -32,6 +33,13 @@ From [`docs/results`](docs/results/) and [`docs/findings.md`](docs/findings.md):
 | First run of a never-seen binary (every `cargo build` makes new ones) | **320–450 ms** of security checks vs 1–2 ms warm |
 | APFS clonefile vs plain copy for dependencies | ~1.8× faster, but clones get indexed too, so *where* matters more than *how* |
 | First `cargo build` of the GUI app in a fresh worktree | **256.7 CPU-s** cold vs **5.1 CPU-s** after `coolant prewarm` (50× less) |
+
+On a MacBook Pro M2 Pro, one Claude Code session building a TypeScript
+monorepo kept **6.8 of 10 cores** busy for two minutes (58–61 °C, fans up to
+4,900 rpm): `vite build`, two `tsc` and three `tsgolint` at 2.5–3 GB each, and
+155 process launches a second. Spotlight and security checks used under 0.2
+cores there, so the fix was running fewer of those at once
+([finding 8](docs/findings.md#8-one-agent-session-can-keep-most-of-the-mac-busy)).
 
 ## Install
 
@@ -68,7 +76,7 @@ cargo install --git https://github.com/Tarekkharsa/coolant coolant-cli
 
 ```sh
 coolant doctor                       # check this machine, with a fix for each problem
-coolant profile -d 120 -o run.json   # record 2 minutes while your agents work
+coolant profile -d 120 -o run.json   # record 2 minutes while your agents work (CPU, heat, memory, swap)
 coolant report run.json              # re-render a saved run
 coolant sensors                      # temperature / power / fan
 coolant bench --preset quick         # reproducible agent-like workloads (~5 min)
@@ -122,7 +130,8 @@ panel; right-click for Details, Launch at Login, Check for Updates and Quit.
 
 - **Cool, warm or hot, and why.** Judged over the last half minute, with the
   main cause in plain words when it's warm ("Spotlight is re-indexing files
-  your agents write, using about 2 cores"). It redraws every 10 s and a new
+  your agents write, using about 2 cores", or that the Mac is short of
+  memory and swapping because builds and type checkers take gigabytes each). It redraws every 10 s and a new
   status has to hold for 15 s, so nothing jumps around. After you apply a fix
   it checks every few seconds for a while, and says so.
 - **Fix it, one click each,** with a confirm step that explains what will
