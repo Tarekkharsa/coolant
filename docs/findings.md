@@ -195,6 +195,14 @@ is the Claude in Chrome bridge, not an agent session. The category totals in
 this profile overcount; see the method notes. Details are in
 [`results/2026-10-11-m2-pro-macbook-pro-busy.md`](results/2026-10-11-m2-pro-macbook-pro-busy.md).
 
+A second profile after the overcount fix found **8.75 cores** busy, with
+memory pressure at "warning" for 24 s (38% available at the lowest, no swap)
+while three `tsc` and two `tsgolint` ran at once. The busiest single process
+was the Coolant app itself, at 0.77 cores, deleting a `node_modules` tree in
+an idle worktree; `fseventsd` used another 0.75 cores passing on the change
+events. Details are in
+[`results/2026-10-12-m2-pro-macbook-pro-busy-rerun.md`](results/2026-10-12-m2-pro-macbook-pro-busy-rerun.md).
+
 ## Method notes
 
 - CPU per category comes from sampling every process once per second
@@ -210,6 +218,11 @@ this profile overcount; see the method notes. Details are in
   in them are not. Fixed after 0.2.0-beta.8: a vanished process is credited
   to its nearest living ancestor, and a sample can't add more hidden CPU than
   the host counters say was busy.
+- One case remains: when a process's details can't be read for one sample
+  (usually as it exits), its start time reads as 0, it looks like a new
+  process, and its lifetime CPU is counted again in that sample (36.5 CPU-s in
+  the second M2 Pro busy profile). The cap on hidden CPU doesn't cover newly
+  seen processes, so that category is too high by the same amount.
 - Temperatures and power come from unprivileged sources: IOHID die sensors,
   SMC, IOReport GPU energy, and kernel per-coalition energy for CPU (the
   IOReport CPU energy counters don't change for unprivileged readers on

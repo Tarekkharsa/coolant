@@ -108,7 +108,7 @@ was already attributed. Neither needs elevated privileges.
 The machine had three `claude` processes, but only one was working:
 
 - `claude:64882` (started from a terminal 39 minutes before, working in
-  `gha-tanstack`) ran everything: `vite build`, two `tsc` (2.8 and 3.1 GB),
+  a TypeScript monorepo) ran everything: `vite build`, two `tsc` (2.8 and 3.1 GB),
   three `tsgolint` (2.5–2.7 GB each), and `git`. Its subagents run inside the same
   process, so the profile can't split them.
 - `claude:90320` was the session running this profile.
