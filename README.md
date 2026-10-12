@@ -78,7 +78,7 @@ cargo install --git https://github.com/Tarekkharsa/coolant coolant-cli
 coolant doctor                       # check this machine, with a fix for each problem
 coolant profile -d 120 -o run.json   # record 2 minutes while your agents work (CPU, heat, memory, swap)
 coolant report run.json              # re-render a saved run
-coolant sensors                      # temperature / power / fan
+coolant sensors                      # temperature / power / fan / memory
 coolant bench --preset quick         # reproducible agent-like workloads (~5 min)
 ```
 
@@ -120,6 +120,29 @@ list (command line only, never opened the app) every project counts as on.
 **Safety rules everywhere:** dry runs by default where it matters; never touch
 protected paths; never touch folders a running process uses; never stop
 processes that serve ports exposed through Tailscale Serve/Funnel.
+
+## For your coding agent
+
+A [skill](skills/coolant/SKILL.md) teaches your agent to use coolant:
+check heat and memory before starting several builds or subagents at once
+(and run them one at a time when the Mac is short), explain why the Mac is
+hot when you ask, and prewarm the worktrees it creates. It asks you before
+anything that deletes, moves or stops something.
+
+**Claude Code:**
+
+```
+/plugin marketplace add Tarekkharsa/coolant
+/plugin install coolant@coolant
+```
+
+**Other agents that read skills** (Codex, …): copy the folder into their
+skills folder, for example:
+
+```sh
+mkdir -p ~/.codex/skills/coolant
+curl -fsSL https://raw.githubusercontent.com/Tarekkharsa/coolant/main/skills/coolant/SKILL.md -o ~/.codex/skills/coolant/SKILL.md
+```
 
 ## The Mac app
 

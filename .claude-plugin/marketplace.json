@@ -1,0 +1,16 @@
+{
+  "name": "coolant",
+  "owner": {
+    "name": "Tarek Kharsa"
+  },
+  "metadata": {
+    "description": "Coolant: keep your Mac cool while coding agents work."
+  },
+  "plugins": [
+    {
+      "name": "coolant",
+      "source": "./",
+      "description": "Lets your coding agent check Mac heat, CPU and memory with coolant before heavy parallel work, explain why the Mac is hot or slow, and prewarm new worktrees."
+    }
+  ]
+}
