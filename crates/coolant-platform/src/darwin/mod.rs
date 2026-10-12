@@ -144,6 +144,9 @@ fn add_rusage(p: &mut Process) -> bool {
     p.disk_read = ri.ri_diskio_bytesread;
     p.disk_written = ri.ri_diskio_byteswritten;
     p.wakeups = ri.ri_interrupt_wkups + ri.ri_pkg_idle_wkups;
+    if ri.ri_phys_footprint > 0 {
+        p.rss_bytes = ri.ri_phys_footprint;
+    }
     // Anchor to a fixed reference so the same process always yields the
     // same start time: it is half of the key that tells processes apart.
     static BOOT_MS: OnceLock<u64> = OnceLock::new();

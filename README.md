@@ -79,6 +79,7 @@ coolant doctor                       # check this machine, with a fix for each p
 coolant profile -d 120 -o run.json   # record 2 minutes while your agents work (CPU, heat, memory, swap)
 coolant report run.json              # re-render a saved run
 coolant sensors                      # temperature / power / fan / memory
+coolant agent                        # run by an agent: its own footprint, and ok / busy / pause
 coolant bench --preset quick         # reproducible agent-like workloads (~5 min)
 ```
 
@@ -123,11 +124,18 @@ processes that serve ports exposed through Tailscale Serve/Funnel.
 
 ## For your coding agent
 
-A [skill](skills/coolant/SKILL.md) teaches your agent to use coolant:
-check heat and memory before starting several builds or subagents at once
-(and run them one at a time when the Mac is short), explain why the Mac is
-hot when you ask, and prewarm the worktrees it creates. It asks you before
-anything that deletes, moves or stops something.
+Every agent can watch its own impact. `coolant agent` shows the agent that
+runs it its own CPU and memory, its heaviest processes, the servers and
+watchers running in its project (and who started them), and a verdict: `ok`,
+`busy` (run things one at a time) or `pause` (the Mac is hot or short of
+memory).
+
+A [skill](skills/coolant/SKILL.md) teaches your agent to run it before
+starting several builds, test runs or subagents at once, and when it finishes
+a task, to stop the servers it started. It also explains why the Mac is hot
+when you ask and prewarms the worktrees the agent creates. It asks you before
+stopping anything it didn't start, and before anything that deletes or moves
+something.
 
 **Claude Code:**
 

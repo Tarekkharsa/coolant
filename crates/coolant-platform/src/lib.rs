@@ -84,6 +84,9 @@ pub struct Process {
     pub command: String,
     /// User + system, cumulative.
     pub cpu_time: Duration,
+    /// Memory in use. Where details can be read on macOS this is the
+    /// physical footprint, as Activity Monitor shows it: it includes memory
+    /// macOS compressed or swapped out, which resident size leaves out.
     pub rss_bytes: u64,
     /// True when the fields below could be read. On macOS that means
     /// processes owned by the current user.

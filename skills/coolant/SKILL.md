@@ -1,6 +1,6 @@
 ---
 name: coolant
-description: Check and reduce the heat, CPU and memory load on a Mac while coding agents work, using the coolant CLI. Use when the user says the Mac is hot, slow or loud, or the fans are running; before starting several builds, type checkers, test runs or subagents at once; and right after creating a git worktree.
+description: Keep your own work from overheating the Mac or running it out of memory, using the coolant CLI. Use before starting several builds, type checkers, test runs, browser tests or subagents at once; when you finish a task (to stop servers and watchers you started); right after creating a git worktree; and when the user says the Mac is hot, slow or loud.
 ---
 
 # Coolant
@@ -18,33 +18,46 @@ the user how to install it and stop; don't install it yourself:
 curl -fsSL https://raw.githubusercontent.com/Tarekkharsa/coolant/main/scripts/install.sh | sh
 ```
 
-## Before heavy parallel work
+## Check your own footprint
 
-Before starting several builds, type checkers, test suites or subagents at
-once, check the machine (about 2 seconds):
+`coolant agent` (about 3 seconds) shows what *you* are doing to the Mac, not
+just the Mac as a whole:
 
-```sh
-coolant sensors -n 1
+```
+Mac: 6.1 of 10 cores busy · 58°C · thermal nominal · memory normal (41% free) · swap 0 B
+This agent (claude:70867): 4.4 cores, 9.8 GB in 23 processes
+  heaviest: tsc 2.6 GB (pid 18932), tsgolint 2.5 GB (pid 15960), node 2.0 GB (pid 18531)
+Other agent sessions: 1, 0.2 cores
+Servers and watchers in ~/code/app:
+  pid 18531   node vite --port 5173          running 42 min, started by this agent
+Verdict: busy. Don't add parallel work: run builds, type checks and tests one at a time.
 ```
 
-It prints one line, for example
-`cpu 60.2°C … fans 1000 rpm  thermal nominal  memory normal (51% free)  swap 4.2 GB`.
-Versions before 0.2.0-beta.10 print `pressure` instead of `thermal` and no
-memory; suggest updating (the app's *Check for Updates*).
+`--json` gives the same as JSON. Run it:
 
-- `thermal` other than `nominal`, or `memory` `warning`/`critical`: run the
-  work one at a time instead of in parallel, don't start more subagents, and
-  tell the user why in one line.
-- Low free memory (under about 20%) or swap that keeps growing between checks:
-  same.
-- Otherwise go ahead.
+- **Before starting several builds, type checkers, test suites, browser
+  tests or subagents at once.** Follow the verdict:
+  - `ok`: go ahead.
+  - `busy`: don't add parallel work; run things one at a time.
+  - `pause`: the Mac is hot or short of memory. Let what's running finish
+    and stop what you no longer need before starting anything heavy. Tell
+    the user in one line.
+- **When you finish a task.** Stop the servers and watchers *started by this
+  agent* that you no longer need (`kill <pid>`), and any test or build runs of
+  yours still going. Leave the ones started by another agent or by no agent
+  (their parent exited) alone; list them for the user and ask.
 
-Each `tsc`, `tsgo`, `tsgolint`, `vite build` or `next build` can take 2–3 GB
-and several cores. Prefer one at a time, prefer incremental modes
-(`tsc -b`, `--incremental`, `cargo check` over `cargo build`), and stop the
-watchers and dev servers you started when you no longer need them.
+Each `tsc`, `tsgo`, `tsgolint`, `vite build`, `next build` or headless browser
+can take gigabytes and several cores. Prefer one at a time, prefer
+incremental modes (`tsc -b`, `--incremental`, `cargo check` over
+`cargo build`), and give test runners fewer workers when the verdict isn't
+`ok` (`vitest --maxWorkers=2`, `playwright test --workers=2`).
 
-Check once before a batch, not in a loop.
+Check before a batch and after a task, not in a loop.
+
+`coolant agent` needs 0.2.0-beta.13 or later. With an older version use
+`coolant sensors -n 1` (temperature, thermal state, and from beta.10, memory
+and swap), and suggest updating (the app's *Check for Updates*).
 
 ## When the user says the Mac is hot or slow
 
@@ -79,7 +92,8 @@ Never do these without the user's explicit OK, and say what each will change:
 - `coolant tune` (moves folders), anything with `--force`, `coolant tune --undo`.
 - `coolant projects on|off|all` and `coolant protect --remove`.
 - `coolant prewarm --install-hook` (adds a git hook).
-- Stopping any process, including leftover dev servers. List them and ask.
+- Stopping a process you didn't start (`coolant agent` says who started each
+  server). List them and ask.
 - `coolant bench` (several minutes of heavy load).
 
 Never move or symlink agent worktree folders yourself; Claude Code then

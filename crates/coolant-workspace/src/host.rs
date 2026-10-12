@@ -140,6 +140,11 @@ fn runs(command: &str, server: &str) -> bool {
     })
 }
 
+/// Whether `command` starts a long-running dev server or watcher.
+pub fn is_server(command: &str) -> bool {
+    SERVERS.iter().any(|s| runs(command, s))
+}
+
 /// Groups this user's dev servers and watchers by (folder, command line).
 /// `cwd` gives a process's working directory.
 pub fn duplicate_servers(procs: &[Process], cwd: impl Fn(i32) -> Option<PathBuf>) -> Vec<Duplicate> {
@@ -151,7 +156,7 @@ pub fn duplicate_servers(procs: &[Process], cwd: impl Fn(i32) -> Option<PathBuf>
     for p in procs {
         let dev = matches!(classify::of(&p.name, &p.command), Category::Runtime | Category::Build);
         let settled = p.start_ms > 0 && now_ms.saturating_sub(p.start_ms) >= MIN_AGE_MS;
-        if p.uid != uid || !dev || !settled || !SERVERS.iter().any(|s| runs(&p.command, s)) {
+        if p.uid != uid || !dev || !settled || !is_server(&p.command) {
             continue;
         }
         if let Some(dir) = cwd(p.pid) {

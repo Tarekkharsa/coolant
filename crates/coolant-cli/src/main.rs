@@ -13,6 +13,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 #[cfg(unix)]
+mod agent;
+#[cfg(unix)]
 mod workspace;
 
 #[derive(Parser)]
@@ -127,6 +129,16 @@ enum Cmd {
         #[arg(long)]
         remove: bool,
     },
+    /// For coding agents: this agent's CPU and memory, the servers running in
+    /// this project, and whether to start more heavy work
+    #[cfg(unix)]
+    Agent {
+        /// Seconds to watch
+        #[arg(short, long, default_value_t = 2)]
+        sample: u64,
+        #[arg(long)]
+        json: bool,
+    },
     /// Print temperature, power and fan readings
     Sensors {
         #[arg(short = 'n', long, default_value_t = 5)]
@@ -146,6 +158,8 @@ fn main() -> Result<()> {
         #[cfg(unix)]
         Cmd::Bench { preset, scenarios, agents, out } => bench(&preset, scenarios, agents, &out),
         Cmd::Sensors { count } => sensors(count),
+        #[cfg(unix)]
+        Cmd::Agent { sample, json } => agent::run(sample, json),
         #[cfg(unix)]
         Cmd::Doctor { sample, json } => workspace::doctor(sample, json),
         #[cfg(unix)]
