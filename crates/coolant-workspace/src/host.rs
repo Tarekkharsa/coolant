@@ -7,6 +7,7 @@ use coolant_platform::Process;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::Instant;
 
 /// Endpoint security system extensions that are active, by display name
@@ -52,6 +53,22 @@ pub fn exec_latency_ms() -> Option<f64> {
     }
     times.sort_by(f64::total_cmp);
     Some(times[times.len() / 2])
+}
+
+/// Program start time measured only while the machine is quiet (1-minute
+/// load under 2): under load it shows the load, not the security software
+/// (7.5 ms vs 2.8 ms on the same Mac). The lowest seen by this process;
+/// None until there has been a quiet moment.
+pub fn quiet_exec_latency_ms() -> Option<f64> {
+    static LOWEST: Mutex<Option<f64>> = Mutex::new(None);
+    let mut lowest = LOWEST.lock().ok()?;
+    let mut load = 0.0;
+    // SAFETY: getloadavg writes at most one value into `load`.
+    let quiet = unsafe { libc::getloadavg(&mut load, 1) } == 1 && load < 2.0;
+    if quiet && let Some(ms) = exec_latency_ms() {
+        *lowest = Some(lowest.map_or(ms, |l| l.min(ms)));
+    }
+    *lowest
 }
 
 /// Container/VM runtimes that are running; each keeps its own Linux VM.
@@ -106,15 +123,35 @@ pub struct Duplicate {
     pub extra: Vec<(i32, String)>,
 }
 
+/// Dev servers and watchers run for a long time; test runners (vitest,
+/// jest) start identical short-lived workers, which this leaves out.
+const MIN_AGE_MS: u64 = 2 * 60 * 1000;
+
+/// Whether `command` runs `server` as a word or path component: `vite`
+/// matches `.bin/vite dev` and `vite/bin/vite.js` but not `vitest` or
+/// `--config vite.config.ts`.
+fn runs(command: &str, server: &str) -> bool {
+    command.match_indices(server).any(|(i, _)| {
+        let before = command[..i].chars().next_back().is_none_or(|c| c.is_whitespace() || c == '/' || c == '"');
+        let rest = &command[i + server.len()..];
+        let rest = [".js", ".mjs", ".cjs"].iter().find_map(|ext| rest.strip_prefix(ext)).unwrap_or(rest);
+        let after = rest.chars().next().is_none_or(|c| c.is_whitespace() || c == '"');
+        before && after
+    })
+}
+
 /// Groups this user's dev servers and watchers by (folder, command line).
 /// `cwd` gives a process's working directory.
 pub fn duplicate_servers(procs: &[Process], cwd: impl Fn(i32) -> Option<PathBuf>) -> Vec<Duplicate> {
     // SAFETY: getuid has no preconditions.
     let uid = unsafe { libc::getuid() };
+    let now_ms =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
     let mut groups: BTreeMap<(PathBuf, String), Vec<&Process>> = BTreeMap::new();
     for p in procs {
         let dev = matches!(classify::of(&p.name, &p.command), Category::Runtime | Category::Build);
-        if p.uid != uid || !dev || !SERVERS.iter().any(|s| p.command.contains(s)) {
+        let settled = p.start_ms > 0 && now_ms.saturating_sub(p.start_ms) >= MIN_AGE_MS;
+        if p.uid != uid || !dev || !settled || !SERVERS.iter().any(|s| runs(&p.command, s)) {
             continue;
         }
         if let Some(dir) = cwd(p.pid) {
@@ -185,5 +222,19 @@ mod tests {
         assert_eq!(dups[0].keep, 10);
         assert_eq!(dups[0].extra.iter().map(|e| e.0).collect::<Vec<_>>(), [20, 30]);
         assert_eq!(short_command(&dups[0].command), "node vite");
+    }
+
+    #[test]
+    fn test_workers_and_new_processes_are_not_dev_servers() {
+        assert!(runs("node /app/node_modules/vite/bin/vite.js --port 3000", "vite"));
+        assert!(runs("node_modules/.bin/vite", "vite"));
+        assert!(!runs("node /app/node_modules/.bin/vitest run", "vite"));
+        assert!(!runs("node node_modules/vitest/dist/workers/forks.js --config vite.config.ts", "vite"));
+        assert!(!runs("jest --watchAll", "--watch"));
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let young = [proc(10, now - 5_000, "node .bin/vite"), proc(20, now - 4_000, "node .bin/vite")];
+        assert!(duplicate_servers(&young, |_| Some(PathBuf::from("/app"))).is_empty());
+        let unknown = [proc(10, 0, "node .bin/vite"), proc(20, 0, "node .bin/vite")];
+        assert!(duplicate_servers(&unknown, |_| Some(PathBuf::from("/app"))).is_empty());
     }
 }

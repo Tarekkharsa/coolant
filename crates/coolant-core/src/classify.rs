@@ -372,6 +372,8 @@ const NAME_RULES: &[(Category, &[&str])] = &[
         Desktop,
         &[
             "WindowServer",
+            // The driver for displays on a DisplayLink dock.
+            "DisplayLinkUserAgent",
             "Dock",
             "Finder",
             "SystemUIServer",
@@ -570,6 +572,7 @@ mod tests {
             ("Google Chrome Helper (Renderer)", "", Browser),
             ("com.apple.DriverKit-AppleBCMWLAN", "", Kernel),
             ("coolant-app", "/Applications/Coolant.app/Contents/MacOS/coolant-app", Coolant),
+            ("DisplayLinkUserAgent", "", Desktop),
             ("git", "git status", Vcs),
             ("mystery", "", Other),
         ];

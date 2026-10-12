@@ -191,7 +191,7 @@ fn endpoint_security(out: &mut Vec<Check>) {
     if !cfg!(target_os = "macos") {
         return;
     }
-    let Some(ms) = crate::host::exec_latency_ms() else { return };
+    let Some(ms) = crate::host::quiet_exec_latency_ms() else { return };
     if ms < SLOW_EXEC_MS {
         return;
     }
@@ -393,7 +393,9 @@ fn stale(cfg: &Config, linked: &[&Worktree], out: &mut Vec<Check>) {
 
 fn prewarm(linked: &[&Worktree], all: &[Worktree], out: &mut Vec<Check>) {
     let (mut cold, mut repos) = (Vec::new(), Vec::new());
-    for w in linked.iter().filter(|w| w.idle_days() < 7.0) {
+    // Merged worktrees are what sweep cleans; offering to fill them again
+    // would undo it.
+    for w in linked.iter().filter(|w| w.idle_days() < 7.0 && !w.merged) {
         let Some(main) = all.iter().find(|m| m.main && m.repo == w.repo) else { continue };
         let missing = artifacts(&main.path)
             .iter()

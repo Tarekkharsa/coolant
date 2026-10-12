@@ -106,7 +106,14 @@ pub fn read(run: &Run, window_s: f64) -> Option<Reading> {
     } else {
         Level::Cool
     };
-    let short_of_memory = matches!(sn.memory_pressure, MemoryPressure::Warning | MemoryPressure::Critical);
+    // "Warning" comes and goes under ordinary load (it showed with 43% free
+    // and no swap), so it only counts when it lasts and memory is really
+    // tight: little free, or swap growing.
+    let tight = |p: MemoryPressure| matches!(p, MemoryPressure::Warning | MemoryPressure::Critical);
+    let warned = recent.iter().filter(|s| tight(s.sensors.memory_pressure)).count() as f64 / n;
+    let swap_grew = sn.swap_used_bytes.saturating_sub(recent[0].sensors.swap_used_bytes) >= 256 << 20;
+    let short_of_memory = matches!(sn.memory_pressure, MemoryPressure::Critical)
+        || (warned >= 0.5 && (sn.memory_free_pct < 25.0 || swap_grew));
     let level = if level == Level::Cool && short_of_memory { Level::Warm } else { level };
 
     let fan = match sn.fan_rpm.first() {
@@ -651,6 +658,16 @@ mod tests {
         assert_eq!(tight.level, Level::Warm);
         assert_eq!(tight.line, "45°C · fan quiet · 0.8 busy cores · memory low");
         assert!(tight.cause.unwrap().contains("3.0 GB in swap"));
+
+        // Warning with plenty free and no swap is ordinary load.
+        let mut fine = run(0.8, 0.0, 45.0, ThermalPressure::Nominal);
+        for s in &mut fine.samples {
+            s.sensors.memory_pressure = MemoryPressure::Warning;
+            s.sensors.memory_free_pct = 43.0;
+        }
+        let fine = read30(&fine).unwrap();
+        assert_eq!(fine.level, Level::Cool);
+        assert_eq!(fine.line, "45°C · fan quiet · 0.8 busy cores");
     }
 
     #[test]

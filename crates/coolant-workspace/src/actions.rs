@@ -95,17 +95,21 @@ pub fn apply(cfg: &Config, action: &Action) -> Result<Done> {
             // in a project that is switched off.
             let inuse = crate::inuse::InUse::scan();
             let exposed = crate::exposed::exposed_pids();
-            let mut stopped = 0;
+            let (mut stopped, mut gone) = (0, 0);
             for (pid, command) in procs {
                 let same = inuse.command(*pid) == Some(command.as_str());
+                gone += usize::from(!same);
                 let protected = !cfg.may_touch_cwd(inuse.cwd(*pid));
                 // SAFETY: kill(2) with a plain signal has no memory-safety concerns.
                 if same && !protected && !exposed.contains(pid) && unsafe { libc::kill(*pid, libc::SIGTERM) } == 0 {
                     stopped += 1;
                 }
             }
+            if stopped == 0 && gone == procs.len() {
+                return Ok(Done { message: "Nothing to stop: those copies had already exited.".into(), undo: None });
+            }
             if stopped == 0 {
-                bail!("those processes have already exited or changed");
+                bail!("they're in a protected folder or serve a shared port, so they were left running");
             }
             Ok(Done {
                 message: format!("Stopped {stopped} extra cop{}.", if stopped == 1 { "y" } else { "ies" }),

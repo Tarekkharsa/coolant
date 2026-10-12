@@ -162,18 +162,18 @@ impl Dashboard {
             return;
         }
         self.fixes.confirm = None;
-        self.fixes.busy = Some(title);
+        self.fixes.busy = Some(title.clone());
         background(
             cx,
             move || actions::apply(&Config::load().unwrap_or_default(), &action),
-            |d, res, cx| {
+            move |d, res, cx| {
                 d.fixes.busy = None;
                 match res {
                     Ok(Done { message, undo }) => {
                         d.fixes.push(message, undo, false);
                         d.settle();
                     }
-                    Err(e) => d.fixes.push(format!("Couldn't apply: {e:#}"), None, true),
+                    Err(e) => d.fixes.push(format!("{title}: didn't work, {e:#}"), None, true),
                 }
                 d.refresh_checks(cx);
             },
@@ -339,9 +339,10 @@ fn compact_text(c: &Check) -> (String, String) {
         Some(Action::SpotlightPrivacy { paths: ps }) => ("Stop Spotlight indexing agent worktrees".into(), paths(ps)),
         Some(Action::RestoreMoved { paths: ps }) => ("Move back folders Coolant moved".into(), paths(ps)),
         Some(Action::ExcludeFromBackups { paths: ps }) => ("Stop backing up agent worktrees".into(), paths(ps)),
-        Some(Action::Prewarm { worktrees, .. }) => {
-            (format!("Prewarm {} new worktree(s)", worktrees.len()), "so their first build isn't from scratch".into())
-        }
+        Some(Action::Prewarm { worktrees, .. }) => (
+            format!("Prewarm {} worktree(s)", worktrees.len()),
+            "they have no build folders yet, so the first build starts from scratch".into(),
+        ),
         Some(Action::Sweep) => ("Free space in finished worktrees".into(), first_clause(&c.title)),
         Some(Action::StopService { formula }) => {
             (format!("Stop {formula}, which keeps crashing"), first_clause(&c.title))

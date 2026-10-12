@@ -210,6 +210,10 @@ DisplayLink display driver used another 0.44 cores, as it had since boot.
 The same morning the Coolant app offered to prewarm the 31 worktrees it had
 just swept, and flagged `vitest` workers as duplicate `vite` dev servers; see
 [`results/2026-10-12-m2-pro-macbook-pro-app-panel.md`](results/2026-10-12-m2-pro-macbook-pro-app-panel.md).
+Fixed in 0.2.0-beta.12: prewarm skips merged worktrees, the duplicate check
+matches whole command names and ignores processes younger than 2 minutes,
+program start time is only measured while the Mac is quiet, and "memory low"
+needs lasting pressure with little free memory or growing swap.
 
 ## Method notes
 
