@@ -203,6 +203,14 @@ an idle worktree; `fseventsd` used another 0.75 cores passing on the change
 events. Details are in
 [`results/2026-10-12-m2-pro-macbook-pro-busy-rerun.md`](results/2026-10-12-m2-pro-macbook-pro-busy-rerun.md).
 
+Later that morning, with the CPU at 61–62 °C and both fans above 4,000 rpm,
+most of the heat came from browser tests: about seven headless Chrome
+processes (2.4 cores) and the `node` servers they tested (2.2 cores). A
+DisplayLink display driver used another 0.44 cores, as it had since boot.
+The same morning the Coolant app offered to prewarm the 31 worktrees it had
+just swept, and flagged `vitest` workers as duplicate `vite` dev servers; see
+[`results/2026-10-12-m2-pro-macbook-pro-app-panel.md`](results/2026-10-12-m2-pro-macbook-pro-app-panel.md).
+
 ## Method notes
 
 - CPU per category comes from sampling every process once per second
