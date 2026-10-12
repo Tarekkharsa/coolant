@@ -172,6 +172,7 @@ pub fn friendly(c: Category) -> &'static str {
         Category::Audio => "Audio",
         Category::CrashReporting => "Crash reporting",
         Category::Kernel => "The system",
+        Category::Coolant => "Coolant itself",
         Category::Other => "Other apps",
     }
 }

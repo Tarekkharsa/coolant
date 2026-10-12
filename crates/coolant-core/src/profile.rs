@@ -271,7 +271,20 @@ impl Session {
         let (Ok(procs), Ok(cpu)) = (self.backend.processes(), self.backend.cpu()) else { return false };
         let now = Instant::now();
         let prev = std::mem::take(&mut self.prev);
-        let cur: HashMap<Key, Labeled> = classify::label(procs).into_iter().map(|l| (key(&l), l)).collect();
+        // A process whose details couldn't be read for one sample (usually as
+        // it exits) has no start time. Keep it under the key it had, so it
+        // isn't taken for a new process and counted again from zero.
+        let prev_by_pid: HashMap<i32, Key> = prev.keys().map(|k| (k.0, *k)).collect();
+        let cur: HashMap<Key, Labeled> = classify::label(procs)
+            .into_iter()
+            .map(|l| {
+                let k = key(&l);
+                match prev_by_pid.get(&k.0) {
+                    Some(pk) if !prev.contains_key(&k) && (pk.1 == 0 || k.1 == 0) => (*pk, l),
+                    _ => (k, l),
+                }
+            })
+            .collect();
         let by_pid: HashMap<i32, &Labeled> = cur.values().map(|l| (l.process.pid, l)).collect();
 
         let elapsed = now.duration_since(self.prev_time).as_secs_f64().max(1e-3);
@@ -284,13 +297,32 @@ impl Session {
         };
 
         let before = self.attributed;
-        for (k, l) in &cur {
+        // A process seen for the first time brings everything it ever used.
+        // Most started since the last sample, but one that was there and
+        // went unread would bring CPU from before the run; together they
+        // can't have used more than the machine had left this sample.
+        let mut used: Vec<(&Key, &Labeled, Duration)> = cur
+            .iter()
+            .map(|(k, l)| {
+                let d = match prev.get(k) {
+                    Some(old) => l.process.cpu_time.saturating_sub(old.process.cpu_time),
+                    None => l.process.cpu_time,
+                };
+                (k, l, d)
+            })
+            .collect();
+        let known: Duration = used.iter().filter(|(k, ..)| prev.contains_key(*k)).map(|u| u.2).sum();
+        let fresh: Duration = used.iter().filter(|(k, ..)| !prev.contains_key(*k)).map(|u| u.2).sum();
+        let room = busy.saturating_sub(known);
+        if fresh > room {
+            let scale = room.as_secs_f64() / fresh.as_secs_f64();
+            for u in used.iter_mut().filter(|(k, ..)| !prev.contains_key(*k)) {
+                u.2 = u.2.mul_f64(scale);
+            }
+        }
+        for (k, l, d) in used {
             let p = &l.process;
             let old = prev.get(k);
-            let d = match old {
-                Some(old) if p.cpu_time >= old.process.cpu_time => p.cpu_time - old.process.cpu_time,
-                _ => p.cpu_time, // new (or PID reused): everything it used is new
-            };
             self.add(&mut s, elapsed, l, l.category, d);
             let entry = self.procs.entry(*k).or_insert_with(|| Proc {
                 pid: p.pid,
@@ -707,5 +739,66 @@ mod tests {
         }
         let run = rec.stop();
         assert!(run.category(Category::Agent).cpu_s <= 0.8 + 1e-9, "{}", run.category(Category::Agent).cpu_s);
+    }
+
+    /// One unreadable sample (no start time, coarser CPU) must not make a
+    /// long-running process look new and count its lifetime again.
+    #[test]
+    fn a_process_missing_its_start_time_is_not_new() {
+        let node = |start, cpu, detailed| Process {
+            pid: 400,
+            ppid: 1,
+            name: "node".into(),
+            command: "node".into(),
+            detailed,
+            cpu_time: ms(cpu),
+            start_ms: start,
+            ..Default::default()
+        };
+        let fake = Arc::new(Fake {
+            steps: vec![
+                vec![node(9, 35_000, true)],
+                vec![node(9, 36_000, true)],
+                vec![node(0, 35_900, false)], // ps rounds down
+                vec![node(9, 36_600, true)],
+            ],
+            cpu: vec![0, 1000, 2000, 3000],
+            i: Mutex::new(0),
+        });
+        let rec = Recorder::start(fake.clone(), Options { interval: ms(20), ..Default::default() }).unwrap();
+        while *fake.i.lock().unwrap() < 4 {
+            std::thread::sleep(ms(5));
+        }
+        let run = rec.stop();
+        assert_eq!((run.category(Category::Runtime).cpu_s * 1000.0).round(), 1700.0);
+        assert_eq!(run.processes.iter().filter(|p| p.pid == 400).count(), 1);
+    }
+
+    /// Processes seen for the first time can't add more than the machine
+    /// had left after the ones already known.
+    #[test]
+    fn new_processes_are_capped_by_the_host() {
+        let p = |pid, name: &str, cpu| Process {
+            pid,
+            ppid: 1,
+            name: name.into(),
+            command: name.into(),
+            detailed: true,
+            cpu_time: ms(cpu),
+            start_ms: pid as u64,
+            ..Default::default()
+        };
+        let fake = Arc::new(Fake {
+            steps: vec![vec![p(100, "claude", 1000)], vec![p(100, "claude", 1100), p(300, "node", 50_000)]],
+            cpu: vec![0, 1000],
+            i: Mutex::new(0),
+        });
+        let rec = Recorder::start(fake.clone(), Options { interval: ms(20), ..Default::default() }).unwrap();
+        while *fake.i.lock().unwrap() < 2 {
+            std::thread::sleep(ms(5));
+        }
+        let run = rec.stop();
+        assert_eq!((run.category(Category::Agent).cpu_s * 1000.0).round(), 100.0);
+        assert_eq!((run.category(Category::Runtime).cpu_s * 1000.0).round(), 900.0);
     }
 }

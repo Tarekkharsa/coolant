@@ -129,12 +129,23 @@ pub fn findings(run: &Run) -> Vec<Finding> {
         push(
             if p == "critical" { Severity::High } else { Severity::Medium },
             format!("Memory pressure was {p} for {secs:.0}s"),
-            &format!(
-                "macOS was short of memory: compressing, swapping and asking apps to free memory. As little as {:.0}% was available; swap went from {} to {}.",
-                t.memory_free_min_pct,
-                bytes(t.swap_start_bytes),
-                bytes(t.swap_max_bytes)
-            ),
+            &if t.swap_max_bytes > t.swap_start_bytes {
+                format!(
+                    "macOS was short of memory: compressing it, swapping and asking apps to free some. As little as {:.0}% was available; swap went from {} to {}.",
+                    t.memory_free_min_pct,
+                    bytes(t.swap_start_bytes),
+                    bytes(t.swap_max_bytes)
+                )
+            } else {
+                format!(
+                    "macOS was short of memory: compressing it and asking apps to free some. As little as {:.0}% was available; {}.",
+                    t.memory_free_min_pct,
+                    match t.swap_start_bytes {
+                        0 => "no swap was used".to_string(),
+                        n => format!("swap stayed at {}", bytes(n)),
+                    }
+                )
+            },
             "Fewer parallel builds and type checkers (tsc, tsgolint, vite each take gigabytes), or fewer agent sessions at once.",
         );
     }

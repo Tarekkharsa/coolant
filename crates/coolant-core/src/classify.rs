@@ -44,12 +44,14 @@ pub enum Category {
     /// Writing crash reports (ReportCrash, spindump): a program crashing.
     CrashReporting,
     Kernel,
+    /// coolant and its app, so the tool shows its own cost.
+    Coolant,
     Other,
 }
 
 impl Category {
     /// Every category in display order.
-    pub const ALL: [Category; 19] = [
+    pub const ALL: [Category; 20] = [
         Self::Agent,
         Self::AgentHost,
         Self::LanguageServer,
@@ -68,6 +70,7 @@ impl Category {
         Self::Audio,
         Self::CrashReporting,
         Self::Kernel,
+        Self::Coolant,
         Self::Other,
     ];
 
@@ -97,6 +100,7 @@ impl Category {
             Self::Audio => "audio",
             Self::CrashReporting => "crash-reporting",
             Self::Kernel => "kernel",
+            Self::Coolant => "coolant",
             Self::Other => "other",
         }
     }
@@ -418,6 +422,7 @@ const NAME_RULES: &[(Category, &[&str])] = &[
         ],
     ),
     (Kernel, &["kernel_task", "System", "launchd"]),
+    (Coolant, &["coolant", "coolant-app"]),
     (Build, &["tsc", "tsgo", "tsgolint", "oxlint", "esbuild"]),
 ];
 
@@ -564,6 +569,7 @@ mod tests {
             ("Docker Desktop Helper (Renderer)", "", ContainerVm),
             ("Google Chrome Helper (Renderer)", "", Browser),
             ("com.apple.DriverKit-AppleBCMWLAN", "", Kernel),
+            ("coolant-app", "/Applications/Coolant.app/Contents/MacOS/coolant-app", Coolant),
             ("git", "git status", Vcs),
             ("mystery", "", Other),
         ];

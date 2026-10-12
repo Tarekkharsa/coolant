@@ -222,7 +222,10 @@ events. Details are in
   (usually as it exits), its start time reads as 0, it looks like a new
   process, and its lifetime CPU is counted again in that sample (36.5 CPU-s in
   the second M2 Pro busy profile). The cap on hidden CPU doesn't cover newly
-  seen processes, so that category is too high by the same amount.
+  seen processes, so that category is too high by the same amount. Fixed
+  after 0.2.0-beta.10: a process without a start time keeps the key it had,
+  and processes seen for the first time can't add more than the machine had
+  left in that sample.
 - Temperatures and power come from unprivileged sources: IOHID die sensors,
   SMC, IOReport GPU energy, and kernel per-coalition energy for CPU (the
   IOReport CPU energy counters don't change for unprivileged readers on

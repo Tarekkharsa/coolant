@@ -10,7 +10,7 @@
 
 use crate::config::{Config, tilde};
 use crate::discover::{Worktree, git};
-use crate::fsutil::{artifacts, disk_usage, human};
+use crate::fsutil::{artifacts, disk_usage, human, remove_quietly};
 use crate::inuse::InUse;
 use anyhow::Result;
 use std::fmt::Write;
@@ -93,8 +93,7 @@ pub fn apply(plans: &[Plan]) -> Result<u64> {
     for p in plans {
         for (rel, size) in &p.artifacts {
             let path = p.worktree.path.join(rel);
-            // remove_dir_all deletes a symlink itself, never its target.
-            std::fs::remove_dir_all(&path).or_else(|_| std::fs::remove_file(&path))?;
+            remove_quietly(&path)?;
             freed += size;
         }
         if p.remove {

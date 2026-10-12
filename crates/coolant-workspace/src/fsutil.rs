@@ -76,6 +76,39 @@ pub fn clone_tree(src: &Path, dst: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Deletes a folder without competing with the agents. It is renamed out of
+/// the way first (instant, and a `.noindex` name so Spotlight drops it), then
+/// deleted on a thread at background priority: on macOS that throttles its
+/// CPU and disk use, on Linux it runs at the lowest nice level. A file or
+/// symlink is just removed; a symlink's target is never touched.
+pub fn remove_quietly(path: &Path) -> std::io::Result<()> {
+    if !std::fs::symlink_metadata(path)?.is_dir() {
+        return std::fs::remove_file(path);
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    let trash = path.with_file_name(format!(".{name}.coolant-trash-{}.noindex", std::process::id()));
+    let target = if std::fs::rename(path, &trash).is_ok() { trash } else { path.to_path_buf() };
+    std::thread::spawn(move || {
+        background_priority();
+        std::fs::remove_dir_all(&target)
+    })
+    .join()
+    .unwrap_or_else(|_| Err(std::io::Error::other("delete thread panicked")))
+}
+
+#[cfg(target_os = "macos")]
+fn background_priority() {
+    unsafe { libc::setpriority(libc::PRIO_DARWIN_THREAD, 0, libc::PRIO_DARWIN_BG) };
+}
+
+#[cfg(target_os = "linux")]
+fn background_priority() {
+    unsafe { libc::setpriority(libc::PRIO_PROCESS, libc::gettid() as _, 19) };
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn background_priority() {}
+
 pub fn human(n: u64) -> String {
     let f = n as f64;
     match n {
@@ -104,5 +137,23 @@ mod tests {
         let want: Vec<PathBuf> =
             ["apps/web/node_modules", "node_modules", "src/target"].iter().map(PathBuf::from).collect();
         assert_eq!(found, want);
+    }
+
+    #[test]
+    fn removes_quietly_without_leftovers() {
+        let tmp = std::env::temp_dir().join(format!("coolant-quiet-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("wt/node_modules/a/b")).unwrap();
+        std::fs::write(tmp.join("wt/node_modules/a/b/f.js"), "x").unwrap();
+        std::fs::create_dir_all(tmp.join("keep")).unwrap();
+        std::fs::write(tmp.join("keep/f"), "x").unwrap();
+        std::os::unix::fs::symlink(tmp.join("keep"), tmp.join("wt/link")).unwrap();
+        remove_quietly(&tmp.join("wt/node_modules")).unwrap();
+        remove_quietly(&tmp.join("wt/link")).unwrap();
+        let left: Vec<_> = std::fs::read_dir(tmp.join("wt")).unwrap().collect();
+        let kept = tmp.join("keep/f").exists();
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert!(left.is_empty(), "{left:?}");
+        assert!(kept, "a symlink's target must survive");
     }
 }
