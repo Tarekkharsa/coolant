@@ -47,6 +47,12 @@ Verdict: busy. Don't add parallel work: run builds, type checks and tests one at
   yours still going. Leave the ones started by another agent or by no agent
   (their parent exited) alone; list them for the user and ask.
 
+A `Leftover processes` line means busy dev processes that belong to nobody:
+their parent exited and no agent runs them (a test server left spinning for
+days, say). They make the Mac `busy` without being anyone's work, so don't
+read them as another agent working. Tell the user their PIDs and how long
+they have run, and ask before stopping them.
+
 Each `tsc`, `tsgo`, `tsgolint`, `vite build`, `next build` or headless browser
 can take gigabytes and several cores. Prefer one at a time, prefer
 incremental modes (`tsc -b`, `--incremental`, `cargo check` over

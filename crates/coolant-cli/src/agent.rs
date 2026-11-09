@@ -2,7 +2,7 @@
 //! whether it should start more heavy work. Meant to be run by the agent.
 
 use anyhow::Result;
-use coolant_core::classify::{self, Category};
+use coolant_core::classify::{self, Category, Labeled};
 use coolant_core::profile::{Options, Session};
 use coolant_core::report::bytes;
 use coolant_platform::{MemoryPressure, ThermalPressure};
@@ -10,6 +10,7 @@ use coolant_workspace::config::tilde;
 use coolant_workspace::host;
 use coolant_workspace::inuse::InUse;
 use serde_json::json;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
@@ -17,6 +18,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Servers younger than this are probably test runs, not leftovers.
 const SERVER_MIN_AGE_MS: u64 = 2 * 60 * 1000;
+
+/// A process without a parent has to be this old, and its tree this busy,
+/// to be reported as a leftover.
+const LEFTOVER_MIN_AGE_MS: u64 = 10 * 60 * 1000;
+const LEFTOVER_MIN_CORES: f64 = 0.5;
 
 pub fn run(secs: u64, as_json: bool) -> Result<()> {
     let backend: Arc<dyn coolant_platform::Backend> = Arc::from(coolant_platform::current());
@@ -68,6 +74,12 @@ pub fn run(secs: u64, as_json: bool) -> Result<()> {
         })
         .collect();
 
+    // Busy dev processes nobody is running anymore: they make the Mac busy
+    // without being anyone's work.
+    let cpu_s: HashMap<i32, f64> = run.processes.iter().map(|p| (p.pid, p.cpu_s)).collect();
+    let left = leftovers(&procs, &cpu_s, elapsed, now_ms);
+    let left_cores: f64 = left.iter().map(|l| l.cores).sum();
+
     let thermal_bad =
         !matches!(sn.pressure, ThermalPressure::Nominal | ThermalPressure::Moderate | ThermalPressure::Unknown);
     let memory_bad = sn.memory_pressure == MemoryPressure::Critical
@@ -90,6 +102,13 @@ pub fn run(secs: u64, as_json: bool) -> Result<()> {
     } else {
         ("ok", "Go ahead. Type checkers and builds take gigabytes each, so still prefer one at a time.".to_string())
     };
+    let advice = if left.is_empty() || verdict == "ok" {
+        advice
+    } else {
+        format!(
+            "{advice} {left_cores:.1} of the busy cores are leftover processes, not anyone's work: ask the user whether to stop them."
+        )
+    };
 
     if as_json {
         let v = json!({
@@ -107,6 +126,10 @@ pub fn run(secs: u64, as_json: bool) -> Result<()> {
                 })).collect::<Vec<_>>(),
             })),
             "other_agents": { "sessions": other_agents, "cores": round(others) },
+            "leftovers": left.iter().map(|l| json!({
+                "pid": l.pid, "command": l.command, "running_s": l.age_ms / 1000,
+                "cores": round(l.cores), "memory_bytes": l.rss_bytes,
+            })).collect::<Vec<_>>(),
             "project": tilde(&dir),
             "servers": servers.iter().map(|(pid, cmd, age, who)| json!({
                 "pid": pid, "command": cmd, "running_s": age / 1000, "started_by": who,
@@ -140,6 +163,19 @@ pub fn run(secs: u64, as_json: bool) -> Result<()> {
     if other_agents > 0 {
         println!("Other agent sessions: {other_agents}, {others:.1} cores");
     }
+    if !left.is_empty() {
+        println!("Leftover processes (no parent, no agent): {left_cores:.1} cores");
+        for l in &left {
+            println!(
+                "  pid {:<7} {:<30} running {}, {:.1} cores, {}",
+                l.pid,
+                l.command,
+                age_text(l.age_ms),
+                l.cores,
+                bytes(l.rss_bytes)
+            );
+        }
+    }
     if !servers.is_empty() {
         println!("Servers and watchers in {}:", tilde(&dir));
         for (pid, cmd, age, who) in &servers {
@@ -163,13 +199,136 @@ fn project_dir() -> PathBuf {
         .unwrap_or(cwd)
 }
 
+/// A dev process whose parent exited, with everything running under it.
+#[derive(Debug, PartialEq)]
+struct Leftover {
+    pid: i32,
+    command: String,
+    age_ms: u64,
+    /// Cores the whole tree used over the sample.
+    cores: f64,
+    rss_bytes: u64,
+}
+
+/// Dev processes that were handed to launchd/init when their parent exited,
+/// belong to no agent session, have run for a while and are still busy: a
+/// test server left spinning for days, say. `cpu_s` is each process's CPU
+/// over the sample, which lasted `elapsed` seconds. Busiest first.
+fn leftovers(procs: &[Labeled], cpu_s: &HashMap<i32, f64>, elapsed: f64, now_ms: u64) -> Vec<Leftover> {
+    let mut children: HashMap<i32, Vec<&Labeled>> = HashMap::new();
+    for l in procs {
+        children.entry(l.process.ppid).or_default().push(l);
+    }
+    let mut out: Vec<Leftover> = procs
+        .iter()
+        .filter(|l| {
+            let p = &l.process;
+            let dev = matches!(
+                l.category,
+                Category::Runtime | Category::Build | Category::LanguageServer | Category::PackageManager
+            );
+            let app = p.command.starts_with("/Applications/") || p.command.starts_with("/System/");
+            p.ppid == 1
+                && p.detailed
+                && dev
+                && !app
+                && l.session.is_empty()
+                && p.start_ms > 0
+                && now_ms.saturating_sub(p.start_ms) >= LEFTOVER_MIN_AGE_MS
+        })
+        .filter_map(|root| {
+            // The root and everything under it that isn't an agent's.
+            let (mut cpu, mut rss) = (0.0, 0);
+            let mut todo = vec![root];
+            let mut seen = 0;
+            while let Some(l) = todo.pop() {
+                seen += 1;
+                if seen > 4096 || !l.session.is_empty() {
+                    continue;
+                }
+                cpu += cpu_s.get(&l.process.pid).copied().unwrap_or(0.0);
+                rss += l.process.rss_bytes;
+                todo.extend(
+                    children.get(&l.process.pid).into_iter().flatten().filter(|c| c.process.pid != l.process.pid),
+                );
+            }
+            let cores = cpu / elapsed;
+            (cores >= LEFTOVER_MIN_CORES).then(|| Leftover {
+                pid: root.process.pid,
+                command: host::short_command(&root.process.command),
+                age_ms: now_ms - root.process.start_ms,
+                cores,
+                rss_bytes: rss,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.cores.total_cmp(&a.cores));
+    out.truncate(5);
+    out
+}
+
 fn age_text(ms: u64) -> String {
     match ms / 60_000 {
         m if m < 60 => format!("{m} min"),
-        m => format!("{} h", m / 60),
+        m if m < 48 * 60 => format!("{} h", m / 60),
+        m => format!("{} days", m / (24 * 60)),
     }
 }
 
 fn round(x: f64) -> f64 {
     (x * 10.0).round() / 10.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coolant_platform::Process;
+
+    const NOW: u64 = 1_000_000_000;
+    const DAY: u64 = 24 * 60 * 60 * 1000;
+
+    fn p(pid: i32, ppid: i32, command: &str, start_ms: u64) -> Process {
+        let name = command.split(' ').next().unwrap_or("").rsplit('/').next().unwrap_or("").to_string();
+        Process {
+            pid,
+            ppid,
+            name,
+            command: command.into(),
+            detailed: true,
+            start_ms,
+            rss_bytes: 100,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn busy_old_orphans_are_leftovers() {
+        let procs = classify::label(vec![
+            // A server whose parent exited, spinning for three days.
+            p(10, 1, "node /tmp/a/.output/server/index.mjs", NOW - 3 * DAY),
+            // A wrapper whose parent exited, with the busy server under it.
+            p(20, 1, "node scripts/serve.mjs", NOW - 3 * DAY),
+            p(21, 20, "node /tmp/b/.output/server/index.mjs", NOW - 3 * DAY),
+            // Not leftovers: idle, just started, an app, and an agent's work.
+            p(30, 1, "node /srv/idle.mjs", NOW - 3 * DAY),
+            p(40, 1, "node /tmp/new.mjs", NOW - 60_000),
+            p(50, 1, "/Applications/Foo.app/Contents/MacOS/node x.js", NOW - 3 * DAY),
+            p(60, 1, "claude --verbose", NOW - 3 * DAY),
+            p(61, 60, "node /repo/build.mjs", NOW - 3 * DAY),
+        ]);
+        let cpu: HashMap<i32, f64> = [(10, 3.0), (21, 2.4), (40, 3.0), (50, 3.0), (61, 3.0)].into();
+        let got = leftovers(&procs, &cpu, 3.0, NOW);
+        let pids: Vec<i32> = got.iter().map(|l| l.pid).collect();
+        assert_eq!(pids, [10, 20]);
+        assert_eq!(got[0].command, "node index.mjs");
+        assert_eq!((got[1].cores * 10.0).round(), 8.0);
+        assert_eq!(got[1].rss_bytes, 200);
+    }
+
+    #[test]
+    fn ages() {
+        assert_eq!(age_text(5 * 60_000), "5 min");
+        assert_eq!(age_text(3 * 60 * 60_000), "3 h");
+        assert_eq!(age_text(3 * DAY + 16 * 60 * 60_000), "3 days");
+    }
 }
