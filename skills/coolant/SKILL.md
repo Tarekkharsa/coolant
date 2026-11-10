@@ -47,6 +47,12 @@ Verdict: busy. Don't add parallel work: run builds, type checks and tests one at
   yours still going. Leave the ones started by another agent or by no agent
   (their parent exited) alone; list them for the user and ask.
 
+A `Leftover processes` line lists busy processes that are nobody's work
+anymore: their parent exited (a test server left spinning for days, or an
+agent whose terminal is gone). They make the Mac `busy`, but no agent is
+working there, so don't wait for them to finish. Tell the user their PIDs and
+how long they have run, and ask before stopping them.
+
 Each `tsc`, `tsgo`, `tsgolint`, `vite build`, `next build` or headless browser
 can take gigabytes and several cores. Prefer one at a time, prefer
 incremental modes (`tsc -b`, `--incremental`, `cargo check` over

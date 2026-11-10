@@ -128,7 +128,9 @@ Every agent can watch its own impact. `coolant agent` shows the agent that
 runs it its own CPU and memory, its heaviest processes, the servers and
 watchers running in its project (and who started them), and a verdict: `ok`,
 `busy` (run things one at a time) or `pause` (the Mac is hot or short of
-memory).
+memory). Busy processes whose parent exited (a test server left spinning for
+days) are listed as leftovers, so an agent doesn't take them for another
+agent at work.
 
 A [skill](skills/coolant/SKILL.md) teaches your agent to run it before
 starting several builds, test runs or subagents at once, and when it finishes
