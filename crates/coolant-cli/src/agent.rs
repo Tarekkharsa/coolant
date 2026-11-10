@@ -51,8 +51,6 @@ pub fn run(secs: u64, as_json: bool) -> Result<()> {
         ours.iter().filter(|l| l.category != Category::Agent && l.process.rss_bytes >= 100 << 20).collect();
     heavy.sort_by_key(|l| std::cmp::Reverse(l.process.rss_bytes));
     heavy.truncate(5);
-    let others: f64 = run.sessions.iter().filter(|u| u.key != mine).map(|u| u.cpu_s / elapsed).sum();
-    let other_agents = run.sessions.iter().filter(|u| u.key != mine).count();
 
     // Servers and watchers running in this project, whoever started them.
     let dir = project_dir();
@@ -76,9 +74,19 @@ pub fn run(secs: u64, as_json: bool) -> Result<()> {
 
     // Busy dev processes nobody is running anymore: they make the Mac busy
     // without being anyone's work.
-    let cpu_s: HashMap<i32, f64> = run.processes.iter().map(|p| (p.pid, p.cpu_s)).collect();
-    let left = leftovers(&procs, &cpu_s, elapsed, now_ms);
+    let mut cpu_s: HashMap<i32, f64> = run.processes.iter().map(|p| (p.pid, p.cpu_s)).collect();
+    // An agent's CPU includes children that came and went: use its session's.
+    for u in &run.sessions {
+        if let Some(pid) = u.key.rsplit(':').next().and_then(|p| p.parse().ok()) {
+            cpu_s.insert(pid, u.cpu_s);
+        }
+    }
+    let left = leftovers(&procs, &cpu_s, &mine, elapsed, now_ms);
     let left_cores: f64 = left.iter().map(|l| l.cores).sum();
+    // An agent whose parent exited is a leftover, not another agent at work.
+    let working = |key: &str| key != mine && !left.iter().any(|l| l.session == key);
+    let others: f64 = run.sessions.iter().filter(|u| working(&u.key)).map(|u| u.cpu_s / elapsed).sum();
+    let other_agents = run.sessions.iter().filter(|u| working(&u.key)).count();
 
     let thermal_bad =
         !matches!(sn.pressure, ThermalPressure::Nominal | ThermalPressure::Moderate | ThermalPressure::Unknown);
@@ -164,7 +172,7 @@ pub fn run(secs: u64, as_json: bool) -> Result<()> {
         println!("Other agent sessions: {other_agents}, {others:.1} cores");
     }
     if !left.is_empty() {
-        println!("Leftover processes (no parent, no agent): {left_cores:.1} cores");
+        println!("Leftover processes (their parent exited): {left_cores:.1} cores");
         for l in &left {
             println!(
                 "  pid {:<7} {:<30} running {}, {:.1} cores, {}",
@@ -199,7 +207,7 @@ fn project_dir() -> PathBuf {
         .unwrap_or(cwd)
 }
 
-/// A dev process whose parent exited, with everything running under it.
+/// A dev process or agent whose parent exited, with everything under it.
 #[derive(Debug, PartialEq)]
 struct Leftover {
     pid: i32,
@@ -208,13 +216,17 @@ struct Leftover {
     /// Cores the whole tree used over the sample.
     cores: f64,
     rss_bytes: u64,
+    /// The agent session this is, when the leftover is an agent.
+    session: String,
 }
 
-/// Dev processes that were handed to launchd/init when their parent exited,
-/// belong to no agent session, have run for a while and are still busy: a
-/// test server left spinning for days, say. `cpu_s` is each process's CPU
-/// over the sample, which lasted `elapsed` seconds. Busiest first.
-fn leftovers(procs: &[Labeled], cpu_s: &HashMap<i32, f64>, elapsed: f64, now_ms: u64) -> Vec<Leftover> {
+/// Dev processes and agents that were handed to launchd/init when their
+/// parent exited, have run for a while and are still busy: a test server
+/// left spinning for days, say, or an agent whose terminal is gone. Never
+/// the calling agent (`mine`). `cpu_s` is each process's CPU over the
+/// sample (an agent's includes its session), which lasted `elapsed`
+/// seconds. Busiest first.
+fn leftovers(procs: &[Labeled], cpu_s: &HashMap<i32, f64>, mine: &str, elapsed: f64, now_ms: u64) -> Vec<Leftover> {
     let mut children: HashMap<i32, Vec<&Labeled>> = HashMap::new();
     for l in procs {
         children.entry(l.process.ppid).or_default().push(l);
@@ -227,26 +239,30 @@ fn leftovers(procs: &[Labeled], cpu_s: &HashMap<i32, f64>, elapsed: f64, now_ms:
                 l.category,
                 Category::Runtime | Category::Build | Category::LanguageServer | Category::PackageManager
             );
+            let agent = l.category == Category::Agent && l.session != mine;
             let app = p.command.starts_with("/Applications/") || p.command.starts_with("/System/");
             p.ppid == 1
                 && p.detailed
-                && dev
+                && (agent || dev && l.session.is_empty())
                 && !app
-                && l.session.is_empty()
                 && p.start_ms > 0
                 && now_ms.saturating_sub(p.start_ms) >= LEFTOVER_MIN_AGE_MS
         })
         .filter_map(|root| {
-            // The root and everything under it that isn't an agent's.
+            // The root and everything under it (an agent's session is
+            // already counted in the agent's CPU).
+            let is_agent = root.category == Category::Agent;
             let (mut cpu, mut rss) = (0.0, 0);
             let mut todo = vec![root];
             let mut seen = 0;
             while let Some(l) = todo.pop() {
                 seen += 1;
-                if seen > 4096 || !l.session.is_empty() {
+                if seen > 4096 || l.session != root.session {
                     continue;
                 }
-                cpu += cpu_s.get(&l.process.pid).copied().unwrap_or(0.0);
+                if !is_agent || l.process.pid == root.process.pid {
+                    cpu += cpu_s.get(&l.process.pid).copied().unwrap_or(0.0);
+                }
                 rss += l.process.rss_bytes;
                 todo.extend(
                     children.get(&l.process.pid).into_iter().flatten().filter(|c| c.process.pid != l.process.pid),
@@ -259,6 +275,7 @@ fn leftovers(procs: &[Labeled], cpu_s: &HashMap<i32, f64>, elapsed: f64, now_ms:
                 age_ms: now_ms - root.process.start_ms,
                 cores,
                 rss_bytes: rss,
+                session: root.session.clone(),
             })
         })
         .collect();
@@ -309,20 +326,29 @@ mod tests {
             // A wrapper whose parent exited, with the busy server under it.
             p(20, 1, "node scripts/serve.mjs", NOW - 3 * DAY),
             p(21, 20, "node /tmp/b/.output/server/index.mjs", NOW - 3 * DAY),
-            // Not leftovers: idle, just started, an app, and an agent's work.
+            // An agent whose parent exited, still building.
+            p(70, 1, "claude --verbose", NOW - 3 * DAY),
+            p(71, 70, "node /repo/build.mjs", NOW - DAY),
+            // Not leftovers: idle, just started, an app, an agent someone
+            // runs, and the agent asking.
             p(30, 1, "node /srv/idle.mjs", NOW - 3 * DAY),
             p(40, 1, "node /tmp/new.mjs", NOW - 60_000),
             p(50, 1, "/Applications/Foo.app/Contents/MacOS/node x.js", NOW - 3 * DAY),
-            p(60, 1, "claude --verbose", NOW - 3 * DAY),
+            p(5, 1, "Terminal", NOW - 3 * DAY),
+            p(60, 5, "claude --verbose", NOW - 3 * DAY),
             p(61, 60, "node /repo/build.mjs", NOW - 3 * DAY),
+            p(80, 1, "claude --verbose", NOW - 3 * DAY),
         ]);
-        let cpu: HashMap<i32, f64> = [(10, 3.0), (21, 2.4), (40, 3.0), (50, 3.0), (61, 3.0)].into();
-        let got = leftovers(&procs, &cpu, 3.0, NOW);
+        // Agents (60, 70, 80) carry their session's CPU.
+        let cpu: HashMap<i32, f64> =
+            [(10, 3.0), (21, 2.4), (40, 3.0), (50, 3.0), (60, 3.0), (61, 3.0), (70, 6.0), (71, 5.0), (80, 9.0)].into();
+        let got = leftovers(&procs, &cpu, "claude:80", 3.0, NOW);
         let pids: Vec<i32> = got.iter().map(|l| l.pid).collect();
-        assert_eq!(pids, [10, 20]);
-        assert_eq!(got[0].command, "node index.mjs");
-        assert_eq!((got[1].cores * 10.0).round(), 8.0);
-        assert_eq!(got[1].rss_bytes, 200);
+        assert_eq!(pids, [70, 10, 20]);
+        assert_eq!((got[0].cores, got[0].session.as_str(), got[0].rss_bytes), (2.0, "claude:70", 200));
+        assert_eq!(got[1].command, "node index.mjs");
+        assert_eq!((got[2].cores * 10.0).round(), 8.0);
+        assert_eq!(got[2].rss_bytes, 200);
     }
 
     #[test]

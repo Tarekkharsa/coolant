@@ -450,10 +450,14 @@ fn lookup(name: &str) -> Option<Category> {
 
 /// The category of a single process, ignoring its ancestry.
 pub fn of(name: &str, command: &str) -> Category {
-    if !command.is_empty()
-        && let Some((cat, _)) = CMD_RULES.iter().find(|(_, re)| re.is_match(command))
-    {
-        return *cat;
+    if !command.is_empty() {
+        // An agent is the program that runs, not a word among its arguments:
+        // `node serve.mjs /tmp/codex` and `tail -f logs/claude` aren't agents.
+        let program = program(command);
+        let hit = CMD_RULES.iter().find(|(cat, re)| re.is_match(if *cat == Agent { &program } else { command }));
+        if let Some((cat, _)) = hit {
+            return *cat;
+        }
     }
     let base = command.split(' ').next().unwrap_or("").rsplit('/').next().unwrap_or("");
     if let Some(c) = lookup(name).or_else(|| lookup(base)) {
@@ -471,6 +475,31 @@ pub fn of(name: &str, command: &str) -> Category {
         return Security;
     }
     Other
+}
+
+/// Runtimes and package runners: what they run is named by an argument.
+const RUNNERS: &[&str] = &["node", "bun", "bunx", "deno", "npm", "npx", "pnpm", "yarn", "uv", "uvx", "pipx"];
+
+/// The part of a command line that names the program: the executable, and
+/// for a runtime or package runner the script or package it was given
+/// (`node /usr/local/bin/codex`, `npm exec @openai/codex`).
+fn program(command: &str) -> String {
+    let mut words = command.split(' ').filter(|w| !w.is_empty());
+    let Some(exe) = words.next() else { return String::new() };
+    let base = exe.rsplit('/').next().unwrap_or(exe);
+    if !RUNNERS.contains(&base) && !base.starts_with("python") {
+        return exe.to_string();
+    }
+    let mut out = exe.to_string();
+    for w in words.filter(|w| !w.starts_with('-')).take(2) {
+        out.push(' ');
+        out.push_str(w);
+        // `npm exec <package>`, `pnpm dlx <package>`, `bun x <package>`.
+        if !matches!(w, "exec" | "dlx" | "x" | "run") {
+            break;
+        }
+    }
+    out
 }
 
 /// A process with its category and owning agent session.
@@ -563,6 +592,12 @@ mod tests {
             ("XProtectRemediatorPirrit", "", Security),
             ("node", "node /x/node_modules/typescript/lib/tsserver.js --stdio", LanguageServer),
             ("node", "node /usr/local/bin/codex exec", Agent),
+            ("node", "npm exec @openai/codex", Agent),
+            ("node", "npx -y @anthropic-ai/claude-code --resume x", Agent),
+            // An agent's name among the arguments doesn't make an agent.
+            ("node", "node /tmp/e2e/.output/server/index.mjs --data /tmp/claude", Runtime),
+            ("node", "node scripts/serve.mjs /repos/codex", Runtime),
+            ("tail", "tail -f /tmp/logs/claude", Search),
             ("node", "node --env-file=.env src/main.ts", Runtime),
             ("mds_stores", "/System/Library/Metadata.framework/Support/mds_stores", Indexer),
             ("syspolicyd", "/usr/libexec/syspolicyd", Security),
